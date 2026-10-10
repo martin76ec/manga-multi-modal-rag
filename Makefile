@@ -5,10 +5,16 @@ BATCH_SIZE ?= 32
 install:
 	uv sync
 
-# Small 2-book fixture used by `test` and `ask` -- NOT the full dataset.
-# Already-indexed books are skipped, so re-running this is cheap/instant.
+# Fixture used by `test` and `ask` to guarantee *some* books are indexed.
+# Skips entirely if data/index already has anything (e.g. the full
+# dataset) -- otherwise falls back to indexing 2 small books, enough for
+# scripts/smoke_test.py's known-answer check.
 demo-index:
-	uv run anime-rag index AisazuNihaIrarenai ARMS
+	@if [ -d data/index ] && [ -n "$$(ls -A data/index 2>/dev/null)" ]; then \
+		echo "demo-index: data/index already has books, skipping"; \
+	else \
+		uv run anime-rag index AisazuNihaIrarenai ARMS; \
+	fi
 
 # The real full-dataset indexing job (all 87 books). See scripts/h200_index_all.sh
 # for the bigger-GPU version with pushing to HF built in.
