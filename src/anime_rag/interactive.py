@@ -15,7 +15,6 @@ from pathlib import Path
 import inquirer
 from PIL import Image, ImageOps
 from rich.console import Console, Group
-from rich.table import Table
 from rich.text import Text
 from rich_pixels import Pixels
 
@@ -102,19 +101,10 @@ def _print_results(results: list[SearchResult], translations: list[str | None]) 
         console.print("[red]no results[/red]\n")
         return
 
-    layout = Table.grid(padding=(0, 2))
-    layout.add_column()
-    layout.add_column()
-
-    left = _top_result_panel(results[0], translations[0])
-
-    if len(results) > 1:
-        right = Group(*(_small_result_row(i, r, t) for i, (r, t) in enumerate(zip(results[1:], translations[1:]), 1)))
-        layout.add_row(left, right)
-    else:
-        layout.add_row(left)
-
-    console.print(layout)
+    console.print(_top_result_panel(results[0], translations[0]))
+    for i, (r, t) in enumerate(zip(results[1:], translations[1:]), 1):
+        console.print()
+        console.print(_small_result_row(i, r, t))
     console.print()
 
 
