@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 
 import inquirer
-from PIL import Image
+from PIL import Image, ImageOps
 from rich.console import Console
 from rich.text import Text
 from rich_pixels import Pixels
@@ -24,7 +24,12 @@ from .indexing import Index
 from .llm import ChatLLM
 from .search import SearchResult, Searcher
 
-THUMBNAIL_SIZE = (32, 32)
+# rich-pixels only offers two renderers (half-cell, 2x vertical resolution
+# via unicode half-blocks, or full-cell at half that) -- no quadrant/higher
+# resolution option. Manga line art + screentone dithering blurs into gray
+# mush at small sizes, so legibility comes from going bigger and boosting
+# contrast before downscaling, not from the renderer itself.
+THUMBNAIL_SIZE = (64, 64)
 
 MODE_SEARCH_TEXT = "Search by text"
 MODE_SEARCH_IMAGE = "Search by image"
@@ -42,6 +47,7 @@ def _source_page_path(meta: dict) -> Path:
 def _render_thumbnail(image_path: Path) -> Pixels | None:
     try:
         img = Image.open(image_path).convert("RGB")
+        img = ImageOps.autocontrast(img, cutoff=2)
         img.thumbnail(THUMBNAIL_SIZE)
         return Pixels.from_image(img)
     except Exception:
