@@ -125,39 +125,11 @@ def _print_results(results: list[SearchResult], translations: list[str | None]) 
     console.print()
 
 
-def _panel_grid(meta_list: list[dict]) -> Table | Group | Text:
-    """Same big-left/small-right layout as _print_results, but for plain
-    metadata dicts (the agent has no similarity scores to show)."""
-    if not meta_list:
-        return Text("(none)", style="dim")
-
-    first = meta_list[0]
-    big = Group(
-        _render_thumbnail(Path(first["image_path"]), TOP_THUMBNAIL_SIZE) or Text(""),
-        Text(f"{first['book']} p.{first['page_index']:03d}", style="bold cyan"),
-    )
-    if len(meta_list) == 1:
-        return big
-
-    rows = []
-    for m in meta_list[1:]:
-        row = Table.grid(padding=(0, 1))
-        row.add_column()
-        row.add_column()
-        row.add_row(
-            _render_thumbnail(Path(m["image_path"]), SMALL_THUMBNAIL_SIZE) or Text(""),
-            Text(f"{m['book']} p.{m['page_index']:03d}", style="cyan"),
-        )
-        rows.append(row)
-
-    layout = Table.grid(padding=(0, 2))
-    layout.add_column()
-    layout.add_column()
-    layout.add_row(big, Group(*rows))
-    return layout
-
-
-def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
+def _print_agent_result(result: AgentResult) -> None:
+    """Reuses _print_results for the agent's panels -- same big/small
+    thumbnail grid, same scores/characters/dialogue/page detail that plain
+    search shows, since the agent's panels ARE SearchResults internally
+    (agent.py keeps the full objects now, not just bare ids)."""
     for i, step in enumerate(result.steps):
         console.rule(f"step {i}", style="dim")
         if is_degenerate(step.reply):
@@ -166,18 +138,18 @@ def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
             console.print(step.reply.strip())
         if step.query:
             console.print(f"\n[bold]Observation[/bold] (search: [italic]{step.query!r}[/italic]):")
-            console.print(step.observation)
-            panel_metas = [meta_by_id[pid] for pid in step.panel_ids if pid in meta_by_id]
-            console.print(_panel_grid(panel_metas))
+            if step.panels:
+                _print_results([r for r, _ in step.panels], [t for _, t in step.panels])
+            else:
+                console.print(step.observation)
         console.print()
 
     console.rule(style="green")
     console.print(f"[bold green]Final Answer:[/bold green] {result.answer}")
 
-    if result.seen_panel_ids:
+    if result.seen_panels:
         console.print("\n[bold]Panels consulted:[/bold]")
-        panel_metas = [meta_by_id[pid] for pid in result.seen_panel_ids if pid in meta_by_id]
-        console.print(_panel_grid(panel_metas))
+        _print_results([r for r, _ in result.seen_panels], [t for _, t in result.seen_panels])
     console.print()
 
 
@@ -185,7 +157,6 @@ def run(args: argparse.Namespace) -> None:
     index_dir = Path(args.index_dir)
     with console.status("[bold green]Loading index and models..."):
         index = Index.load_all(index_dir)
-        meta_by_id = {m["id"]: m for m in index.meta}
         embedder = ClipJapaneseEmbedder()
         searcher = Searcher(index, embedder)
     console.print(f"[bold green]Loaded[/bold green] {len(index)} panels from {index_dir}\n")
@@ -251,4 +222,4 @@ def run(args: argparse.Namespace) -> None:
             except Exception as e:
                 console.print(f"[red]agent failed: {e}[/red]\n")
                 continue
-            _print_agent_result(result, meta_by_id)
+            _print_agent_result(result)

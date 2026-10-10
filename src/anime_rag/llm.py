@@ -22,9 +22,20 @@ PROVIDER_FALLBACKS = ["featherless-ai", "novita", "scaleway"]
 
 
 def is_degenerate(text: str, min_words: int = 30, max_top_word_frac: float = 0.4) -> bool:
-    """Detects pathological repetition-loop output (e.g. the same word
-    repeated dozens of times -- observed from one provider occasionally),
-    not a quality judgment on normal text."""
+    """Detects pathological repetition-loop output (observed from one
+    provider occasionally), not a quality judgment on normal text. Two
+    distinct patterns seen in practice:
+    - the exact same word repeated dozens of times (e.g. "thought" x70)
+    - a malformed tool-call template repeated with a *varying* argument
+      each time (e.g. 'call:search_manga{query: "..."}thought' x10) --
+      word-frequency alone misses this since punctuation glued to the
+      varying text makes each "word" technically unique, so this also
+      checks raw occurrences of "thought", which our prompt format expects
+      at most once per well-formed reply.
+    """
+    if text.lower().count("thought") > 2:
+        return True
+
     words = text.split()
     if len(words) < min_words:
         return False

@@ -23,7 +23,7 @@ from pathlib import Path
 from PIL import Image
 
 from .llm import ChatLLM
-from .search import Searcher
+from .search import SearchResult, Searcher
 
 # Resize/recompress crops before sending them to the (vision-capable) LLM --
 # full-size crops would bloat the request and, since every past Observation
@@ -66,14 +66,14 @@ class AgentStep:
     reply: str
     query: str | None
     observation: str | None
-    panel_ids: list[str] = field(default_factory=list)
+    panels: list[tuple[SearchResult, str | None]] = field(default_factory=list)
 
 
 @dataclass
 class AgentResult:
     answer: str
     steps: list[AgentStep]
-    seen_panel_ids: list[str]
+    seen_panels: list[tuple[SearchResult, str | None]]
 
 
 class MrklIrcotAgent:
@@ -92,9 +92,12 @@ class MrklIrcotAgent:
         b64 = base64.b64encode(buf.getvalue()).decode()
         return f"data:image/jpeg;base64,{b64}"
 
-    def _observe(self, query: str) -> tuple[list[dict], str, list[str]]:
+    def _observe(self, query: str) -> tuple[list[dict], str, list[tuple[SearchResult, str | None]]]:
         """Returns (multimodal content blocks for the LLM, plain-text
-        summary for the CLI transcript, panel ids)."""
+        summary for the CLI transcript, the ranked (SearchResult,
+        translation) pairs -- same shape `search`/`ask` show, so the agent's
+        transcript can carry the exact same detail: scores, characters,
+        dialogue, page path)."""
         results = self.searcher.search_text(query, top_k=self.top_k)
         translations = self.searcher.translate_result_texts(results)
 
@@ -102,7 +105,7 @@ class MrklIrcotAgent:
             return [{"type": "text", "text": "(no matching panels found)"}], "(no matching panels found)", []
 
         lines: list[str] = []
-        ids: list[str] = []
+        panels: list[tuple[SearchResult, str | None]] = []
         content: list[dict] = [
             {"type": "text", "text": f"Observation for search_manga[{query!r}] -- {len(results)} panel(s):"}
         ]
@@ -114,10 +117,10 @@ class MrklIrcotAgent:
             lines.append(f"- {label}")
             content.append({"type": "text", "text": f"Panel {idx + 1} -- {label}"})
             content.append({"type": "image_url", "image_url": {"url": self._encode_image(Path(m["image_path"]))}})
-            ids.append(m["id"])
+            panels.append((r, en))
 
         observation_text = "\n".join(lines)
-        return content, observation_text, ids
+        return content, observation_text, panels
 
     def answer(self, question: str) -> AgentResult:
         messages = [
@@ -125,7 +128,8 @@ class MrklIrcotAgent:
             {"role": "user", "content": f"Question: {question}"},
         ]
         steps: list[AgentStep] = []
-        seen_ids: list[str] = []
+        seen_panels: list[tuple[SearchResult, str | None]] = []
+        seen_ids: set[str] = set()
 
         for i in range(self.max_steps + 1):
             if i == self.max_steps:
@@ -137,7 +141,7 @@ class MrklIrcotAgent:
             final_match = FINAL_ANSWER_RE.search(reply)
             if final_match:
                 steps.append(AgentStep(reply=reply, query=None, observation=None))
-                return AgentResult(answer=final_match.group(1).strip(), steps=steps, seen_panel_ids=seen_ids)
+                return AgentResult(answer=final_match.group(1).strip(), steps=steps, seen_panels=seen_panels)
 
             action_match = ACTION_INPUT_RE.search(reply)
             if not action_match:
@@ -146,15 +150,17 @@ class MrklIrcotAgent:
                 continue
 
             query = action_match.group(1).strip().strip('"')
-            content, observation_text, ids = self._observe(query)
-            for pid in ids:
+            content, observation_text, panels = self._observe(query)
+            for r, t in panels:
+                pid = r.meta["id"]
                 if pid not in seen_ids:
-                    seen_ids.append(pid)
-            steps.append(AgentStep(reply=reply, query=query, observation=observation_text, panel_ids=ids))
+                    seen_ids.add(pid)
+                    seen_panels.append((r, t))
+            steps.append(AgentStep(reply=reply, query=query, observation=observation_text, panels=panels))
             messages.append({"role": "user", "content": content})
 
         return AgentResult(
             answer="(agent did not produce a final answer within the step budget)",
             steps=steps,
-            seen_panel_ids=seen_ids,
+            seen_panels=seen_panels,
         )

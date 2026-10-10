@@ -8,7 +8,7 @@ from .agent import AgentResult, MrklIrcotAgent
 from .annotations import parse_book
 from .embedder import ClipJapaneseEmbedder
 from .indexing import Index, build_index
-from .llm import DEFAULT_MODEL, ChatLLM
+from .llm import DEFAULT_MODEL, ChatLLM, is_degenerate
 from .panels import build_panels
 from .search import SearchResult, Searcher
 
@@ -235,38 +235,41 @@ def cmd_ask(args: argparse.Namespace) -> None:
     run(args)
 
 
-def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
+def _print_agent_result(result: AgentResult) -> None:
+    """Reuses _print_results for the agent's panels -- same
+    scores/characters/dialogue/page detail plain search shows, since the
+    agent's panels are the same SearchResult objects internally."""
     for i, step in enumerate(result.steps):
         print(f"--- step {i} ---")
-        print(step.reply.strip())
+        if is_degenerate(step.reply):
+            print("(model returned a malformed/repetitive reply here -- retried automatically)")
+        else:
+            print(step.reply.strip())
         if step.query:
             print(f"\nObservation (search: {step.query!r}):")
-            print(step.observation)
+            if step.panels:
+                _print_results([r for r, _ in step.panels], [t for _, t in step.panels])
+            else:
+                print(step.observation)
         print()
 
     print("=" * 40)
     print("Final Answer:", result.answer)
 
-    if result.seen_panel_ids:
+    if result.seen_panels:
         print("\nPanels consulted:")
-        for pid in result.seen_panel_ids:
-            m = meta_by_id.get(pid)
-            if m:
-                print(f"  - {m['book']} p.{m['page_index']:03d} ({pid})")
-                print(f"      crop: {m['image_path']}")
-                print(f"      page: {_source_page_path(m)}")
+        _print_results([r for r, _ in result.seen_panels], [t for _, t in result.seen_panels])
 
 
 def cmd_agent(args: argparse.Namespace) -> None:
     index = Index.load_all(Path(args.index_dir))
-    meta_by_id = {m["id"]: m for m in index.meta}
     embedder = ClipJapaneseEmbedder()
     searcher = Searcher(index, embedder)
     llm = ChatLLM(model=args.model)
     agent = MrklIrcotAgent(searcher, llm, max_steps=args.max_steps, top_k=args.top_k)
 
     result = agent.answer(args.question)
-    _print_agent_result(result, meta_by_id)
+    _print_agent_result(result)
 
 
 def build_parser() -> argparse.ArgumentParser:
