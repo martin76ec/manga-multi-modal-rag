@@ -228,68 +228,11 @@ def cmd_search(args: argparse.Namespace) -> None:
 
 
 def cmd_ask(args: argparse.Namespace) -> None:
-    """Interactive REPL: load the index and models once, then let you type
-    one question after another instead of re-paying model load time per
-    query like a one-shot `anime-rag search` call would."""
-    index_dir = Path(args.index_dir)
-    index = Index.load_all(index_dir)
-    meta_by_id = {m["id"]: m for m in index.meta}
-    print(f"Loaded {len(index)} panels from {index_dir}.")
-    embedder = ClipJapaneseEmbedder()
-    searcher = Searcher(index, embedder)
-    agent: MrklIrcotAgent | None = None  # lazy: only hits the HF Inference API if 'agent:' is used
+    """Interactive REPL -- menu-driven (inquirer), colored (rich), with
+    inline panel thumbnails (rich-pixels). See interactive.py."""
+    from .interactive import run
 
-    print("Type a question (English or Japanese) and press enter -- plain retrieval by default.")
-    print("Prefix with 'image:' and a path to search by image, e.g. image:data/raw/crops/ARMS/ARMS_001_xxx.jpg")
-    print("Prefix with 'agent:' to route through the MRKL+IRCoT agent (uses the HF Inference API) instead.")
-    print("Empty line or 'quit' to exit.\n")
-
-    while True:
-        try:
-            query = input("> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if not query or query.lower() in {"quit", "exit"}:
-            break
-
-        if query.lower().startswith("agent:"):
-            question = query[len("agent:") :].strip()
-            if not question:
-                print("usage: agent: <question>\n")
-                continue
-            if agent is None:
-                agent = MrklIrcotAgent(
-                    searcher, ChatLLM(model=args.model), max_steps=args.max_steps, top_k=args.agent_top_k
-                )
-            print("(running agent -- this calls the HF Inference API and can take a while)", flush=True)
-            try:
-                result = agent.answer(question)
-            except Exception as e:
-                print(f"agent failed: {e}\n")
-                continue
-            _print_agent_result(result, meta_by_id)
-            print()
-            continue
-
-        if query.lower().startswith("image:"):
-            image_path = Path(query[len("image:") :].strip())
-            if not image_path.exists():
-                print(f"no such file: {image_path}\n")
-                continue
-            results = searcher.search_image(image_path, top_k=args.top_k, w_img=args.w_img, w_text=args.w_text)
-        else:
-            results = searcher.search_text(
-                query, top_k=args.top_k, w_img=args.w_img, w_text=args.w_text, translate=not args.no_translate
-            )
-            if results and results[0].query_ja:
-                print(f'(translated to Japanese: "{results[0].query_ja}")\n')
-
-        translations: list[str | None] = [None] * len(results)
-        if not args.no_translate:
-            translations = searcher.translate_result_texts(results)
-
-        _print_results(results, translations)
+    run(args)
 
 
 def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:

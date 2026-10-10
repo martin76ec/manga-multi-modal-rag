@@ -45,8 +45,8 @@ uv run anime-rag search "missing son" --w-img 0.4 --w-text 0.6 --save-crops out/
 uv run anime-rag search "警察官" --no-translate
 
 # interactive REPL: loads models once, then take as many questions as you like.
-# plain text/image queries do direct retrieval; prefix with 'agent:' to route
-# that one question through the MRKL+IRCoT agent instead (see below)
+# menu-driven (search by text / by image / ask the agent / quit), colored
+# output, and an inline true-color thumbnail of each result panel
 uv run anime-rag ask
 
 # agentic Q&A: a MRKL+IRCoT agent that issues its own retrieval queries over
