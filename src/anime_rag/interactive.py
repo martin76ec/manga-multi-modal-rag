@@ -22,7 +22,7 @@ from rich_pixels import Pixels
 from .agent import AgentResult, MrklIrcotAgent
 from .embedder import ClipJapaneseEmbedder
 from .indexing import Index
-from .llm import ChatLLM
+from .llm import ChatLLM, is_degenerate
 from .search import SearchResult, Searcher
 
 # rich-pixels only offers two renderers (half-cell, 2x vertical resolution
@@ -125,13 +125,50 @@ def _print_results(results: list[SearchResult], translations: list[str | None]) 
     console.print()
 
 
+def _panel_grid(meta_list: list[dict]) -> Table | Group | Text:
+    """Same big-left/small-right layout as _print_results, but for plain
+    metadata dicts (the agent has no similarity scores to show)."""
+    if not meta_list:
+        return Text("(none)", style="dim")
+
+    first = meta_list[0]
+    big = Group(
+        _render_thumbnail(Path(first["image_path"]), TOP_THUMBNAIL_SIZE) or Text(""),
+        Text(f"{first['book']} p.{first['page_index']:03d}", style="bold cyan"),
+    )
+    if len(meta_list) == 1:
+        return big
+
+    rows = []
+    for m in meta_list[1:]:
+        row = Table.grid(padding=(0, 1))
+        row.add_column()
+        row.add_column()
+        row.add_row(
+            _render_thumbnail(Path(m["image_path"]), SMALL_THUMBNAIL_SIZE) or Text(""),
+            Text(f"{m['book']} p.{m['page_index']:03d}", style="cyan"),
+        )
+        rows.append(row)
+
+    layout = Table.grid(padding=(0, 2))
+    layout.add_column()
+    layout.add_column()
+    layout.add_row(big, Group(*rows))
+    return layout
+
+
 def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
     for i, step in enumerate(result.steps):
         console.rule(f"step {i}", style="dim")
-        console.print(step.reply.strip())
+        if is_degenerate(step.reply):
+            console.print("[dim italic](model returned a malformed/repetitive reply here -- retried automatically)[/dim italic]")
+        else:
+            console.print(step.reply.strip())
         if step.query:
             console.print(f"\n[bold]Observation[/bold] (search: [italic]{step.query!r}[/italic]):")
             console.print(step.observation)
+            panel_metas = [meta_by_id[pid] for pid in step.panel_ids if pid in meta_by_id]
+            console.print(_panel_grid(panel_metas))
         console.print()
 
     console.rule(style="green")
@@ -139,14 +176,8 @@ def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
 
     if result.seen_panel_ids:
         console.print("\n[bold]Panels consulted:[/bold]")
-        for pid in result.seen_panel_ids:
-            m = meta_by_id.get(pid)
-            if not m:
-                continue
-            console.print(f"  [cyan]{m['book']}[/cyan] p.{m['page_index']:03d} ({pid})")
-            pixels = _render_thumbnail(Path(m["image_path"]), SMALL_THUMBNAIL_SIZE)
-            if pixels is not None:
-                console.print(pixels)
+        panel_metas = [meta_by_id[pid] for pid in result.seen_panel_ids if pid in meta_by_id]
+        console.print(_panel_grid(panel_metas))
     console.print()
 
 

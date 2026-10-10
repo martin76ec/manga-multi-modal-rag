@@ -7,6 +7,8 @@ network access and an HF token with inference access.
 
 from __future__ import annotations
 
+from collections import Counter
+
 from huggingface_hub import InferenceClient
 from huggingface_hub.errors import HfHubHTTPError
 
@@ -19,18 +21,37 @@ DEFAULT_MODEL = "google/gemma-4-26B-A4B-it"
 PROVIDER_FALLBACKS = ["featherless-ai", "novita", "scaleway"]
 
 
+def is_degenerate(text: str, min_words: int = 30, max_top_word_frac: float = 0.4) -> bool:
+    """Detects pathological repetition-loop output (e.g. the same word
+    repeated dozens of times -- observed from one provider occasionally),
+    not a quality judgment on normal text."""
+    words = text.split()
+    if len(words) < min_words:
+        return False
+    _, top_count = Counter(words).most_common(1)[0]
+    return top_count / len(words) > max_top_word_frac
+
+
 class ChatLLM:
     def __init__(self, model: str = DEFAULT_MODEL, providers: list[str] | None = None):
         self.model = model
         self.providers = providers or PROVIDER_FALLBACKS
 
-    def chat(self, messages: list[dict], max_tokens: int = 300, stop: list[str] | None = None) -> str:
+    def chat(
+        self,
+        messages: list[dict],
+        max_tokens: int = 300,
+        stop: list[str] | None = None,
+        frequency_penalty: float = 0.4,
+    ) -> str:
         last_error: Exception | None = None
         # Each provider gets 2 tries: observed one provider occasionally
         # return finish_reason="tool_calls" with an empty `content` (and a
-        # garbled `reasoning` field) for no apparent reason -- a transient
-        # hosted-inference glitch, not something retrying the same prompt
-        # against the same provider failed to recover from in testing.
+        # garbled `reasoning` field), or a degenerate repetition loop, for
+        # no apparent reason -- a transient hosted-inference glitch, not
+        # something retrying the same prompt against the same provider
+        # failed to recover from in testing. frequency_penalty also
+        # directly discourages the repetition loops at the source.
         for provider in self.providers:
             for _attempt in range(2):
                 try:
@@ -40,12 +61,16 @@ class ChatLLM:
                         messages=messages,
                         max_tokens=max_tokens,
                         stop=stop,
+                        frequency_penalty=frequency_penalty,
                     )
                     content = resp.choices[0].message.content
                     if not content:
                         last_error = RuntimeError(
                             f"{provider} returned empty content (finish_reason={resp.choices[0].finish_reason!r})"
                         )
+                        continue
+                    if is_degenerate(content):
+                        last_error = RuntimeError(f"{provider} returned degenerate/repetitive content")
                         continue
                     return content
                 except HfHubHTTPError as e:
