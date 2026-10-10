@@ -19,6 +19,9 @@ import re
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, PreTrainedTokenizerBase
+from transformers.utils import logging as hf_logging
+
+hf_logging.set_verbosity_error()  # see embedder.py -- same rationale
 
 MODEL_ID = "facebook/nllb-200-distilled-600M"
 EN_CODE = "eng_Latn"

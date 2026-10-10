@@ -15,6 +15,12 @@ import numpy as np
 import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModel, AutoTokenizer
+from transformers.utils import logging as hf_logging
+
+# Silences two informational-only warnings this model's remote code always
+# triggers (T5Tokenizer "legacy behaviour", and "using a slow image
+# processor") -- neither is actionable for us, just noise on every load.
+hf_logging.set_verbosity_error()
 
 MODEL_ID = "line-corporation/clip-japanese-base"
 
