@@ -168,6 +168,15 @@ def cmd_pull_index(args: argparse.Namespace) -> None:
     print("note: this is embeddings + metadata only -- run `anime-rag crops` to regenerate panel images locally")
 
 
+def _source_page_path(meta: dict) -> Path:
+    """The full manga page a crop came from. Not stored in the index itself
+    -- derived from the crop's own path plus the book/page_index metadata
+    we already have, since crops are always written to
+    <data_dir>/crops/<book>/<id>.jpg from <data_dir>/images/<book>/<page>.jpg."""
+    data_dir = Path(meta["image_path"]).parents[2]
+    return data_dir / "images" / meta["book"] / f"{meta['page_index']:03d}.jpg"
+
+
 def _print_results(results: list[SearchResult], translations: list[str | None]) -> None:
     for rank, r in enumerate(results):
         m = r.meta
@@ -180,6 +189,7 @@ def _print_results(results: list[SearchResult], translations: list[str | None]) 
         if translations[rank]:
             print(f"    text (en): {translations[rank]}")
         print(f"    crop:  {m['image_path']}")
+        print(f"    page:  {_source_page_path(m)}")
         print()
 
 
@@ -299,7 +309,9 @@ def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
         for pid in result.seen_panel_ids:
             m = meta_by_id.get(pid)
             if m:
-                print(f"  - {m['book']} p.{m['page_index']:03d} ({pid}): {m['image_path']}")
+                print(f"  - {m['book']} p.{m['page_index']:03d} ({pid})")
+                print(f"      crop: {m['image_path']}")
+                print(f"      page: {_source_page_path(m)}")
 
 
 def cmd_agent(args: argparse.Namespace) -> None:
