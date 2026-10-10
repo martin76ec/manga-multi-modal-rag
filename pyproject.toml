@@ -12,6 +12,7 @@ dependencies = [
     "huggingface-hub>=0.30,<1.0",
     "numpy>=2.5.3",
     "pillow>=12.3.0",
+    "pyarrow>=26.0.0",
     "requests>=2.34.2",
     "sentencepiece>=0.2.2",
     "tiktoken>=0.14.0",

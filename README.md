@@ -119,15 +119,27 @@ resume after an interruption).
 ### Moving the index to another machine
 
 `push-index`/`pull-index` upload/download **only the built index**
-(embeddings + metadata, `data/index/`) via a HF dataset repo — never the
-actual panel crop images, which live in a separate directory
-(`data/raw/crops/`) the license is stricter about. This is derived numeric
-output, analogous to publishing a pretrained model, not a copy of the
-dataset itself — see the license note below. Push it **private**.
+(embeddings + metadata) via a HF dataset repo — never the actual panel crop
+images, which live in a separate directory (`data/raw/crops/`) the license
+is stricter about. This is derived numeric output, analogous to publishing
+a pretrained model, not a copy of the dataset itself — see the license note
+below. Push it **private**.
+
+The index is consolidated into a single `index.parquet` file before
+uploading — Parquet is the standard single-file format for embeddings +
+metadata (what HF's own `datasets` library uses), and far easier to move
+around than one directory per book (87 books = 348 small files otherwise).
+`pull-index` downloads that one file and transparently re-splits it back
+into the usual `data/index/<book>/` layout, so nothing else changes.
 
 ```bash
 # on the box that built the index
 uv run anime-rag push-index yourname/manga109-rag-index
+
+# if you previously pushed with an older version of this tool that uploaded
+# the raw per-book folders instead of a single file, add --clean once to
+# remove that old structure from the repo after the parquet file is up
+uv run anime-rag push-index yourname/manga109-rag-index --clean
 
 # on another machine
 uv run anime-rag pull-index yourname/manga109-rag-index

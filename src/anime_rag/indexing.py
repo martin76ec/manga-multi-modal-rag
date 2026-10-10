@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from .embedder import ClipJapaneseEmbedder
 from .panels import PanelDoc
@@ -80,6 +82,64 @@ class Index:
         if not book_dirs:
             raise FileNotFoundError(f"No book indices found under {index_dir}")
         return cls.merge([cls.load(d) for d in book_dirs])
+
+    def by_book(self) -> dict[str, "Index"]:
+        """Split a merged index back into one Index per book."""
+        books: dict[str, list[int]] = {}
+        for i, row in enumerate(self.meta):
+            books.setdefault(row["book"], []).append(i)
+        return {
+            book: Index(
+                meta=[self.meta[i] for i in idxs],
+                image_emb=self.image_emb[idxs],
+                text_emb=self.text_emb[idxs],
+                has_text=self.has_text[idxs],
+            )
+            for book, idxs in books.items()
+        }
+
+    def to_parquet(self, path: Path) -> None:
+        """Write the whole index as a single Parquet file -- the standard
+        single-file format for shipping embeddings + metadata together
+        (what HF's own `datasets` library uses), and far easier to move
+        around than one directory per book."""
+        table = pa.table(
+            {
+                "id": [m["id"] for m in self.meta],
+                "book": [m["book"] for m in self.meta],
+                "page_index": [m["page_index"] for m in self.meta],
+                "bbox": [m["bbox"] for m in self.meta],
+                "text": [m["text"] for m in self.meta],
+                "characters": [m["characters"] for m in self.meta],
+                "image_path": [m["image_path"] for m in self.meta],
+                "image_emb": [row.tolist() for row in self.image_emb],
+                "text_emb": [row.tolist() for row in self.text_emb],
+                "has_text": self.has_text.tolist(),
+            }
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(table, path, compression="zstd")
+
+    @classmethod
+    def from_parquet(cls, path: Path) -> "Index":
+        d = pq.read_table(path).to_pydict()
+        n = len(d["id"])
+        meta = [
+            {
+                "id": d["id"][i],
+                "book": d["book"][i],
+                "page_index": d["page_index"][i],
+                "bbox": list(d["bbox"][i]),
+                "text": d["text"][i],
+                "characters": list(d["characters"][i]),
+                "image_path": d["image_path"][i],
+            }
+            for i in range(n)
+        ]
+        image_emb = np.array(d["image_emb"], dtype=np.float32)
+        text_emb = np.array(d["text_emb"], dtype=np.float32)
+        has_text = np.array(d["has_text"], dtype=bool)
+        return cls(meta=meta, image_emb=image_emb, text_emb=text_emb, has_text=has_text)
 
 
 def build_index(

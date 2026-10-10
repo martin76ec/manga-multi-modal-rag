@@ -98,11 +98,16 @@ def cmd_crops(args: argparse.Namespace) -> None:
         print(f"{book}: {len(panels)} crops ready under {crops_dir}")
 
 
+PARQUET_FILENAME = "index.parquet"
+
+
 def cmd_push_index(args: argparse.Namespace) -> None:
-    """Upload the built index (embeddings + metadata only -- never
-    data/raw/crops, which lives in a separate directory tree) to a HF
-    dataset repo, so it can be pulled onto another machine without
-    recomputing embeddings there."""
+    """Upload the built index as a single Parquet file (embeddings +
+    metadata only -- never data/raw/crops, which lives in a separate
+    directory tree) to a HF dataset repo, so it can be pulled onto another
+    machine without recomputing embeddings there. Parquet is the standard
+    single-file format for this (what HF's own `datasets` library uses),
+    and much easier to move around than one directory per book."""
     from huggingface_hub import HfApi
 
     index_dir = Path(args.index_dir)
@@ -110,26 +115,56 @@ def cmd_push_index(args: argparse.Namespace) -> None:
         print(f"no index found under {index_dir}")
         return
 
+    index = Index.load_all(index_dir)
+    parquet_path = Path(args.parquet_path) if args.parquet_path else index_dir.parent / PARQUET_FILENAME
+    index.to_parquet(parquet_path)
+    size_mb = parquet_path.stat().st_size / 1e6
+    print(f"wrote {len(index)} panels ({len(index.by_book())} books) to {parquet_path} ({size_mb:.1f} MB)")
+
     api = HfApi()
     api.create_repo(repo_id=args.repo_id, repo_type="dataset", private=not args.public, exist_ok=True)
-    api.upload_folder(
-        folder_path=str(index_dir),
+    api.upload_file(
+        path_or_fileobj=str(parquet_path),
+        path_in_repo=PARQUET_FILENAME,
         repo_id=args.repo_id,
         repo_type="dataset",
-        commit_message="update panel index (embeddings + metadata only, no images)",
+        commit_message=f"update panel index ({len(index)} panels, embeddings + metadata only, no images)",
     )
     visibility = "public" if args.public else "private"
-    print(f"pushed {index_dir} ({visibility}) to https://huggingface.co/datasets/{args.repo_id}")
+    print(f"pushed {parquet_path} ({visibility}) to https://huggingface.co/datasets/{args.repo_id}")
+
+    if args.clean:
+        existing = api.list_repo_files(repo_id=args.repo_id, repo_type="dataset")
+        keep = {PARQUET_FILENAME, "README.md", ".gitattributes"}
+        stale_top_level = {f.split("/")[0] for f in existing if f not in keep and "/" in f}
+        for folder in sorted(stale_top_level):
+            print(f"removing old {folder}/ from the repo...")
+            api.delete_folder(
+                path_in_repo=folder,
+                repo_id=args.repo_id,
+                repo_type="dataset",
+                commit_message=f"remove pre-parquet {folder}/ (superseded by {PARQUET_FILENAME})",
+            )
+        if stale_top_level:
+            print(f"removed {len(stale_top_level)} old folder(s) from the repo")
+        else:
+            print("nothing to clean")
 
 
 def cmd_pull_index(args: argparse.Namespace) -> None:
-    from huggingface_hub import snapshot_download
+    """Download the single Parquet file and re-split it back into the usual
+    per-book data/index/<book>/ layout, so search/ask/agent/crops all keep
+    working unchanged -- Parquet is just the transport format."""
+    from huggingface_hub import hf_hub_download
+
+    local_path = hf_hub_download(repo_id=args.repo_id, repo_type="dataset", filename=PARQUET_FILENAME)
+    index = Index.from_parquet(Path(local_path))
+    print(f"pulled {len(index)} panels from https://huggingface.co/datasets/{args.repo_id}")
 
     index_dir = Path(args.index_dir)
-    index_dir.mkdir(parents=True, exist_ok=True)
-    local_path = snapshot_download(repo_id=args.repo_id, repo_type="dataset", local_dir=str(index_dir))
-    books = sorted(d.name for d in Path(local_path).iterdir() if d.is_dir())
-    print(f"pulled {len(books)} book indices from https://huggingface.co/datasets/{args.repo_id} into {local_path}")
+    for book, book_index in index.by_book().items():
+        book_index.save(index_dir / book)
+    print(f"split into {len(index.by_book())} book indices under {index_dir}")
     print("note: this is embeddings + metadata only -- run `anime-rag crops` to regenerate panel images locally")
 
 
@@ -316,7 +351,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_push.add_argument("repo_id", help="e.g. yourname/manga109-rag-index")
     p_push.add_argument("--index-dir", default=str(DEFAULT_INDEX_DIR))
+    p_push.add_argument("--parquet-path", default=None, help="where to write the consolidated file (default: <index-dir>/../index.parquet)")
     p_push.add_argument("--public", action="store_true", help="make the repo public (default: private)")
+    p_push.add_argument(
+        "--clean",
+        action="store_true",
+        help="also delete any old non-parquet folders already in the repo (e.g. from a previous upload_folder push)",
+    )
     p_push.set_defaults(func=cmd_push_index)
 
     p_pull = sub.add_parser("pull-index", help="download a previously pushed index from a HF dataset repo")
