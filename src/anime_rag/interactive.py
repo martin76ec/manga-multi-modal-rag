@@ -14,7 +14,8 @@ from pathlib import Path
 
 import inquirer
 from PIL import Image, ImageOps
-from rich.console import Console
+from rich.console import Console, Group
+from rich.table import Table
 from rich.text import Text
 from rich_pixels import Pixels
 
@@ -29,7 +30,8 @@ from .search import SearchResult, Searcher
 # resolution option. Manga line art + screentone dithering blurs into gray
 # mush at small sizes, so legibility comes from going bigger and boosting
 # contrast before downscaling, not from the renderer itself.
-THUMBNAIL_SIZE = (64, 64)
+TOP_THUMBNAIL_SIZE = (72, 72)
+SMALL_THUMBNAIL_SIZE = (28, 28)
 
 MODE_SEARCH_TEXT = "Search by text"
 MODE_SEARCH_IMAGE = "Search by image"
@@ -44,48 +46,83 @@ def _source_page_path(meta: dict) -> Path:
     return data_dir / "images" / meta["book"] / f"{meta['page_index']:03d}.jpg"
 
 
-def _render_thumbnail(image_path: Path) -> Pixels | None:
+def _render_thumbnail(image_path: Path, size: tuple[int, int]) -> Pixels | None:
     try:
         img = Image.open(image_path).convert("RGB")
         img = ImageOps.autocontrast(img, cutoff=2)
-        img.thumbnail(THUMBNAIL_SIZE)
+        img.thumbnail(size)
         return Pixels.from_image(img)
     except Exception:
         return None
 
 
-def _print_result(rank: int, r: SearchResult, translation: str | None) -> None:
+def _result_header(rank: int, r: SearchResult) -> Text:
+    m = r.meta
+    header = Text()
+    header.append(f"#{rank} ", style="bold white")
+    header.append(f"[{r.score:.3f}] ", style="bold green")
+    header.append(f"{m['book']} ", style="bold cyan")
+    header.append(f"p.{m['page_index']:03d}", style="cyan")
+    return header
+
+
+def _top_result_panel(r: SearchResult, translation: str | None) -> Group:
+    """Full detail block for the #1 result -- the left, big column."""
     m = r.meta
     chars = ", ".join(m["characters"]) if m["characters"] else "-"
     text = m["text"] or "-"
     text_score = f"{r.text_score:.3f}" if r.text_score is not None else "-"
 
-    header = Text()
-    header.append(f"#{rank} ", style="bold white")
-    header.append(f"[{r.score:.3f}] ", style="bold green")
-    header.append(f"{m['book']} ", style="bold cyan")
-    header.append(f"p.{m['page_index']:03d} ", style="cyan")
-    header.append(f"({m['id']})", style="dim")
-    console.print(header)
-
-    console.print(f"    img={r.image_score:.3f} text={text_score}  chars: [yellow]{chars}[/yellow]")
-    console.print(f"    [dim]text (ja):[/dim] {text}")
+    lines: list = [_render_thumbnail(Path(m["image_path"]), TOP_THUMBNAIL_SIZE) or Text(""), _result_header(0, r)]
+    lines.append(Text(f"({m['id']})", style="dim"))
+    lines.append(Text(f"img={r.image_score:.3f} text={text_score}  chars: {chars}", style="yellow"))
+    lines.append(Text(f"text (ja): {text}"))
     if translation:
-        console.print(f"    [dim]text (en):[/dim] [italic]{translation}[/italic]")
-    console.print(f"    [dim]page:[/dim] {_source_page_path(m)}")
+        lines.append(Text(f"text (en): {translation}", style="italic"))
+    lines.append(Text(f"page: {_source_page_path(m)}", style="dim"))
+    return Group(*lines)
 
-    pixels = _render_thumbnail(Path(m["image_path"]))
-    if pixels is not None:
-        console.print(pixels)
-    console.print()
+
+def _small_result_row(rank: int, r: SearchResult, translation: str | None) -> Table:
+    """One compact row for the right column: small thumbnail + a couple
+    lines of detail, side by side."""
+    m = r.meta
+    chars = ", ".join(m["characters"]) if m["characters"] else "-"
+    snippet = translation or m["text"] or "-"
+    if len(snippet) > 45:
+        snippet = snippet[:42] + "..."
+
+    details = Group(
+        _result_header(rank, r),
+        Text(f"chars: {chars}", style="yellow dim"),
+        Text(snippet, style="italic dim"),
+    )
+    row = Table.grid(padding=(0, 1))
+    row.add_column()
+    row.add_column()
+    row.add_row(_render_thumbnail(Path(m["image_path"]), SMALL_THUMBNAIL_SIZE) or Text(""), details)
+    return row
 
 
 def _print_results(results: list[SearchResult], translations: list[str | None]) -> None:
     if not results:
         console.print("[red]no results[/red]\n")
         return
-    for rank, (r, t) in enumerate(zip(results, translations)):
-        _print_result(rank, r, t)
+
+    layout = Table.grid(padding=(0, 2))
+    layout.add_column()
+    layout.add_column()
+
+    left = _top_result_panel(results[0], translations[0])
+
+    if len(results) > 1:
+        right = Group(*(_small_result_row(i, r, t) for i, (r, t) in enumerate(zip(results[1:], translations[1:]), 1)))
+        layout.add_row(left, right)
+    else:
+        layout.add_row(left)
+
+    console.print(layout)
+    console.print()
 
 
 def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
@@ -107,7 +144,7 @@ def _print_agent_result(result: AgentResult, meta_by_id: dict) -> None:
             if not m:
                 continue
             console.print(f"  [cyan]{m['book']}[/cyan] p.{m['page_index']:03d} ({pid})")
-            pixels = _render_thumbnail(Path(m["image_path"]))
+            pixels = _render_thumbnail(Path(m["image_path"]), SMALL_THUMBNAIL_SIZE)
             if pixels is not None:
                 console.print(pixels)
     console.print()
