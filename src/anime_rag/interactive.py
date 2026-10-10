@@ -77,6 +77,7 @@ def _top_result_panel(r: SearchResult, translation: str | None) -> Group:
     lines.append(Text(f"text (ja): {text}"))
     if translation:
         lines.append(Text(f"text (en): {translation}", style="italic"))
+    lines.append(Text(f"crop: {m['image_path']}", style="dim"))
     lines.append(Text(f"page: {_source_page_path(m)}", style="dim"))
     return Group(*lines)
 
@@ -93,6 +94,8 @@ def _small_result_row(rank: int, r: SearchResult, translation: str | None) -> Gr
         _result_header(rank, r),
         Text(f"chars: {chars}", style="yellow dim"),
         Text(snippet, style="italic dim"),
+        Text(f"crop: {m['image_path']}", style="dim"),
+        Text(f"page: {_source_page_path(m)}", style="dim"),
     )
 
 
