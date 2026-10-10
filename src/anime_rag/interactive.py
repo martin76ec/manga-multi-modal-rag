@@ -25,13 +25,12 @@ from .indexing import Index
 from .llm import ChatLLM, is_degenerate
 from .search import SearchResult, Searcher
 
-# rich-pixels only offers two renderers (half-cell, 2x vertical resolution
-# via unicode half-blocks, or full-cell at half that) -- no quadrant/higher
-# resolution option. Manga line art + screentone dithering blurs into gray
-# mush at small sizes, so legibility comes from going bigger and boosting
-# contrast before downscaling, not from the renderer itself.
-TOP_THUMBNAIL_SIZE = (72, 72)
-SMALL_THUMBNAIL_SIZE = (28, 28)
+# Only the #1 result gets a thumbnail now (rest are text-only, see
+# _small_result_row) -- rich-pixels only offers two renderers (half-cell,
+# 2x vertical resolution via unicode half-blocks, or full-cell at half
+# that), no quadrant/higher resolution option, so legibility at small
+# sizes comes from going bigger + autocontrast, not the renderer itself.
+TOP_THUMBNAIL_SIZE = (40, 40)
 
 MODE_SEARCH_TEXT = "Search by text"
 MODE_SEARCH_IMAGE = "Search by image"
@@ -83,25 +82,19 @@ def _top_result_panel(r: SearchResult, translation: str | None) -> Group:
     return Group(*lines)
 
 
-def _small_result_row(rank: int, r: SearchResult, translation: str | None) -> Table:
-    """One compact row for the right column: small thumbnail + a couple
-    lines of detail, side by side."""
+def _small_result_row(rank: int, r: SearchResult, translation: str | None) -> Group:
+    """Compact text-only entry for the right column -- no thumbnail."""
     m = r.meta
     chars = ", ".join(m["characters"]) if m["characters"] else "-"
     snippet = translation or m["text"] or "-"
     if len(snippet) > 45:
         snippet = snippet[:42] + "..."
 
-    details = Group(
+    return Group(
         _result_header(rank, r),
         Text(f"chars: {chars}", style="yellow dim"),
         Text(snippet, style="italic dim"),
     )
-    row = Table.grid(padding=(0, 1))
-    row.add_column()
-    row.add_column()
-    row.add_row(_render_thumbnail(Path(m["image_path"]), SMALL_THUMBNAIL_SIZE) or Text(""), details)
-    return row
 
 
 def _print_results(results: list[SearchResult], translations: list[str | None]) -> None:
