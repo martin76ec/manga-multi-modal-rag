@@ -345,9 +345,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="don't auto-translate an English query to Japanese or results to English",
     )
-    p_ask.add_argument("--model", default=DEFAULT_MODEL, help="HF Inference chat model id, for 'agent:' queries")
-    p_ask.add_argument("--max-steps", type=int, default=4, help="max retrieval rounds for 'agent:' queries")
-    p_ask.add_argument("--agent-top-k", type=int, default=3, help="panels retrieved per round for 'agent:' queries")
+    p_ask.add_argument("--model", default=DEFAULT_MODEL, help="HF Inference chat model id, for the agent mode")
+    p_ask.add_argument("--max-steps", type=int, default=4, help="max retrieval rounds for the agent mode")
+    p_ask.add_argument("--agent-top-k", type=int, default=3, help="panels retrieved per round for the agent mode")
     p_ask.set_defaults(func=cmd_ask)
 
     p_agent = sub.add_parser(
