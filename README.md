@@ -4,6 +4,7 @@ Multimodal (Agentic) RAG over the [Manga109-s](https://huggingface.co/datasets/h
 
 - **Code:** https://github.com/martin76ec/manga-multi-modal-rag
 - **Built index (embeddings + metadata, no images):** https://huggingface.co/datasets/martin76ec/Manga109-s-indexes
+- **Demo video:** https://www.youtube.com/watch?v=bUYKq-7YVvg
 
 ## Course project overview
 
