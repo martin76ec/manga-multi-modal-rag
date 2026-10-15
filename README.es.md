@@ -9,7 +9,7 @@ RAG multimodal (Agéntico) sobre el dataset [Manga109-s](https://huggingface.co/
 
 ### Tema
 
-**RAG / RAG Agéntico.** No se construyó con LangChain/LangGraph — esta es una desviación deliberada, respaldada por evidencia, no un descuido. Al evaluar este requisito, avancé lo suficiente en la migración como para probarla de verdad (no solo instalar los paquetes):
+**RAG / RAG Agéntico.** No se construyó con LangChain/LangGraph — esta es una desviación deliberada, respaldada por evidencia, no un descuido. Al evaluar este requisito, avancé lo suficiente en la migración como para probarla de verdad:
 
 - `google/gemma-4-26B-A4B-it`, el modelo con capacidad de visión que este proyecto necesita para que el agente pueda juzgar un panel visualmente (no solo a partir del texto de diálogo), **no usa de forma confiable el tool-calling nativo** — confirmado directamente con la API nativa de HF Inference, sin pasar por LangChain: dado una herramienta registrada, simplemente respondió en texto plano afirmando que no tenía herramientas.
 - Conectarlo a `create_react_agent` de LangGraph lo empeoró, no lo mejoró: **alucinó una llamada a herramienta completamente falsa** — una URL externa inventada y datos de panel ficticios — en lugar de llamar a la herramienta real o reportar el fallo.
@@ -25,11 +25,11 @@ Entonces: ningún modelo disponible para mí hace a la vez visión y tool-callin
 
 ### Línea base vs. solución propuesta
 
-| | Línea base | Propuesta |
-|---|---|---|
-| Recuperación | una sola modalidad: similitud coseno CLIP solo texto **o** solo imagen | puntaje multimodal combinado (`0.6 x imagen + 0.4 x texto`, ajustable) sobre los mismos embeddings de CLIP |
-| Idioma de consulta | solo japonés (tokenizer CLIP crudo) | inglés o japonés (puente de traducción NLLB-200 en ambas direcciones) |
-| Generación de respuesta | se devuelven directamente los top-k paneles, sin razonamiento | agente MRKL+IRCoT: recuperación en varias rondas guiada por el propio razonamiento del modelo, con fundamento visual (ve las imágenes reales del panel, no solo descripciones traducidas), cita libro/página, y dice explícitamente "no lo sé" en lugar de adivinar cuando la evidencia es insuficiente |
+|                         | Línea base                                                             | Propuesta                                                                                                                                                                                                                                                                                               |
+| ----------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Recuperación            | una sola modalidad: similitud coseno CLIP solo texto **o** solo imagen | puntaje multimodal combinado (`0.6 x imagen + 0.4 x texto`, ajustable) sobre los mismos embeddings de CLIP                                                                                                                                                                                              |
+| Idioma de consulta      | solo japonés (tokenizer CLIP crudo)                                    | inglés o japonés (puente de traducción NLLB-200 en ambas direcciones)                                                                                                                                                                                                                                   |
+| Generación de respuesta | se devuelven directamente los top-k paneles, sin razonamiento          | agente MRKL+IRCoT: recuperación en varias rondas guiada por el propio razonamiento del modelo, con fundamento visual (ve las imágenes reales del panel, no solo descripciones traducidas), cita libro/página, y dice explícitamente "no lo sé" en lugar de adivinar cuando la evidencia es insuficiente |
 
 ### Metodología de comparación y resultados
 
@@ -37,62 +37,65 @@ Entonces: ningún modelo disponible para mí hace a la vez visión y tool-callin
 
 **Ablación de modalidad** (misma consulta, `"police officer"`, aislando cada embedding):
 
-| Modo | Mejor resultado (top-1) | Puntaje | ¿Verificado correcto? |
-|---|---|---|---|
-| Solo imagen (`w_img=1.0, w_text=0.0`) | `AisazuNihaIrarenai_007` | 0.256 | no verificado de forma independiente — sin texto de diálogo asociado, señal visiblemente más débil |
-| Solo texto (`w_img=0.0, w_text=1.0`) | `AisazuNihaIrarenai_057` | 0.740 | **sí** — el panel literalmente dice "ちょっと警察の方!!" ("¡Espera... oficial!!") |
-| Combinado (por defecto `0.6/0.4`) | `AisazuNihaIrarenai_057` | 0.403 (= `0.6x0.178 + 0.4x0.740`, verificado a mano) | **sí**, el mismo panel correcto, consistente aritméticamente |
+| Modo                                  | Mejor resultado (top-1)  | Puntaje                                              | ¿Verificado correcto?                                                                              |
+| ------------------------------------- | ------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Solo imagen (`w_img=1.0, w_text=0.0`) | `AisazuNihaIrarenai_007` | 0.256                                                | no verificado de forma independiente — sin texto de diálogo asociado, señal visiblemente más débil |
+| Solo texto (`w_img=0.0, w_text=1.0`)  | `AisazuNihaIrarenai_057` | 0.740                                                | **sí** — el panel literalmente dice "ちょっと警察の方!!" ("¡Espera... oficial!!")                  |
+| Combinado (por defecto `0.6/0.4`)     | `AisazuNihaIrarenai_057` | 0.403 (= `0.6x0.178 + 0.4x0.740`, verificado a mano) | **sí**, el mismo panel correcto, consistente aritméticamente                                       |
 
 Aislar cualquiera de las dos modalidades cambia el ranking; para esta consulta el texto llevó más señal, pero la combinación es lo que un valor por defecto de propósito general necesita para ser robusto en consultas donde ocurre lo contrario (por ejemplo, una consulta puramente visual como "alguien sosteniendo un arma", ver abajo).
 
 **Recuperación base vs. agente** (consultas de prueba durante el desarrollo, lectura cualitativa de "tarea resuelta"):
 
-| Consulta | Línea base (búsqueda directa) | Agente (MRKL+IRCoT) |
-|---|---|---|
-| "police officer" | top-1 correcto, de una sola vez | igual, 1 ronda |
-| "What happens when a police officer shows up at someone's house?" | el usuario necesitaría ya saber que debe buscar "police officer" | encuentra y cita el mismo panel sin indicación previa, sintetiza una respuesta fundamentada sobre la trama del hijo desaparecido |
-| "someone holding a gun" (solo 2 libros indexados, ninguno con un panel real de arma) | devuelve resultados que parecen plausibles pero son incorrectos (no hay arma realmente visible) | **reporta correctamente que no puede encontrar una coincidencia**, en lugar de presentar un resultado incorrecto como correcto |
-| "someone holding a gun" (después de indexar `DollGun`, donde sí existe una coincidencia real) | encuentra el panel correcto, sin explicación | encuentra y **confirma visualmente** el panel ("un primer plano de una pistola Glock"), un detalle que el texto de diálogo no menciona |
-| "The police visit a house about a missing son. What is the father's name, and what does he say about being a parent?" | no puede responder preguntas de múltiples pasos en absoluto (una consulta, una lista ordenada) | ejecutó 4 rondas distintas de recuperación con consultas de seguimiento auto-generadas; encontró correctamente la identidad del padre, luego **admitió honestamente** que no podía confirmar sus palabras exactas sobre la paternidad en lugar de adivinar (la línea correspondiente existía pero quedó mal traducida hasta ser irreconocible — una limitación de calidad de traducción, no un fallo de razonamiento) |
+| Consulta                                                                                                              | Línea base (búsqueda directa)                                                                   | Agente (MRKL+IRCoT)                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "police officer"                                                                                                      | top-1 correcto, de una sola vez                                                                 | igual, 1 ronda                                                                                                                                                                                                                                                                                                                                                                                                        |
+| "What happens when a police officer shows up at someone's house?"                                                     | el usuario necesitaría ya saber que debe buscar "police officer"                                | encuentra y cita el mismo panel sin indicación previa, sintetiza una respuesta fundamentada sobre la trama del hijo desaparecido                                                                                                                                                                                                                                                                                      |
+| "someone holding a gun" (solo 2 libros indexados, ninguno con un panel real de arma)                                  | devuelve resultados que parecen plausibles pero son incorrectos (no hay arma realmente visible) | **reporta correctamente que no puede encontrar una coincidencia**, en lugar de presentar un resultado incorrecto como correcto                                                                                                                                                                                                                                                                                        |
+| "someone holding a gun" (después de indexar `DollGun`, donde sí existe una coincidencia real)                         | encuentra el panel correcto, sin explicación                                                    | encuentra y **confirma visualmente** el panel ("un primer plano de una pistola Glock"), un detalle que el texto de diálogo no menciona                                                                                                                                                                                                                                                                                |
+| "The police visit a house about a missing son. What is the father's name, and what does he say about being a parent?" | no puede responder preguntas de múltiples pasos en absoluto (una consulta, una lista ordenada)  | ejecutó 4 rondas distintas de recuperación con consultas de seguimiento auto-generadas; encontró correctamente la identidad del padre, luego **admitió honestamente** que no podía confirmar sus palabras exactas sobre la paternidad en lugar de adivinar (la línea correspondiente existía pero quedó mal traducida hasta ser irreconocible — una limitación de calidad de traducción, no un fallo de razonamiento) |
 
 **Lectura de esto:** la principal ventaja medible del agente sobre la línea base es decir correctamente "no lo sé" en lugar de devolver con confianza un top-1 incorrecto cuando la evidencia genuinamente no está presente, y encadenar varias rondas de consultas auto-generadas para preguntas que el usuario no podría haber formulado como un único buen término de búsqueda. Su costo (siguiente sección) es considerable, así que no es una mejora estricta — es un punto diferente en la disyuntiva precisión/costo, apropiado cuando una pregunta no puede responderse con una sola recuperación.
 
 ### Comparación de costos
 
-| | Línea base (búsqueda directa) | Propuesta (agente) |
-|---|---|---|
-| Dónde se ejecuta | completamente local (CPU/GPU) | recuperación local; el razonamiento llama a la API de HF Inference (depende de la red, proveedor externo) |
-| Llamadas al LLM por pregunta | 0 | 1 por ronda, hasta `max_steps=4` (+1 respuesta final forzada) = hasta 5 |
-| Tokens por llamada | 0 | `max_tokens=250` de salida, más todo el historial de la conversación (todas las Observaciones previas) reenviado en cada ronda |
-| Imágenes enviadas al modelo | 0 | hasta `top_k=3` paneles/ronda x hasta 4 rondas, redimensionadas a 384px/JPEG calidad 80 antes de enviarlas |
-| Latencia observada | menos de un segundo | decenas de segundos para una pregunta de varias rondas |
-| Costo monetario/de cuenta | ninguno | uso del proveedor de HF Inference (se usó el nivel gratuito aquí; se alcanzó un límite de tasa 429 una vez durante las pruebas) |
+|                              | Línea base (búsqueda directa) | Propuesta (agente)                                                                                                              |
+| ---------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Dónde se ejecuta             | completamente local (CPU/GPU) | recuperación local; el razonamiento llama a la API de HF Inference (depende de la red, proveedor externo)                       |
+| Llamadas al LLM por pregunta | 0                             | 1 por ronda, hasta `max_steps=4` (+1 respuesta final forzada) = hasta 5                                                         |
+| Tokens por llamada           | 0                             | `max_tokens=250` de salida, más todo el historial de la conversación (todas las Observaciones previas) reenviado en cada ronda  |
+| Imágenes enviadas al modelo  | 0                             | hasta `top_k=3` paneles/ronda x hasta 4 rondas, redimensionadas a 384px/JPEG calidad 80 antes de enviarlas                      |
+| Latencia observada           | menos de un segundo           | decenas de segundos para una pregunta de varias rondas                                                                          |
+| Costo monetario/de cuenta    | ninguno                       | uso del proveedor de HF Inference (se usó el nivel gratuito aquí; se alcanzó un límite de tasa 429 una vez durante las pruebas) |
 
 **Cómputo/almacenamiento local (costo único, ambos modos lo comparten):**
 
-| | Valor |
-|---|---|
-| Paneles indexados | 82,124 (87 libros) |
-| Rendimiento de embedding | ~58 paneles/seg (RTX 4060 Ti compartida/con contención, 8GB) |
-| Modelos locales | `line-corporation/clip-japanese-base` (~790MB), `facebook/nllb-200-distilled-600M` (~2.4GB) — ambos gratuitos, locales, sin clave de API |
-| Tamaño del índice construido | 380.5MB (un solo archivo Parquet, embeddings + metadatos, sin imágenes) |
-| Datos crudos en disco (imágenes + recortes, dataset completo) | ~7.8GB |
+|                                                               | Valor                                                                                                                                    |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Paneles indexados                                             | 82,124 (87 libros)                                                                                                                       |
+| Rendimiento de embedding                                      | ~58 paneles/seg (RTX 4060 Ti compartida/con contención, 8GB)                                                                             |
+| Modelos locales                                               | `line-corporation/clip-japanese-base` (~790MB), `facebook/nllb-200-distilled-600M` (~2.4GB) — ambos gratuitos, locales, sin clave de API |
+| Tamaño del índice construido                                  | 380.5MB (un solo archivo Parquet, embeddings + metadatos, sin imágenes)                                                                  |
+| Datos crudos en disco (imágenes + recortes, dataset completo) | ~7.8GB                                                                                                                                   |
 
 ### Conclusiones
 
 **Lo que funcionó:**
+
 - Combinar embeddings de imagen y texto efectivamente cambia los resultados de recuperación respecto a usar cualquiera de los dos solo — verificado a mano, no asumido (ver tabla de ablación).
 - El puente de traducción (NLLB-200, en ambas direcciones) hace que el sistema sea usable por alguien que no lee japonés, tanto al consultar como al mostrar resultados, sin necesitar clave de API (completamente local).
 - La capacidad de visión del agente no es cosmética: encontró y describió correctamente el contenido de un panel ("una pistola Glock") que el texto de diálogo nunca mencionó.
 - El comportamiento de abstención del agente ("no puedo encontrar esto") se mantuvo consistentemente en lugar de alucinar una respuesta incorrecta pero plausible, que es el comportamiento que realmente importa para una herramienta fundamentada en citas.
 
 **Lo que no funcionó, y tuvo que corregirse en el camino** (se deja aquí deliberadamente — esto es lo que "qué funcionó / qué no" debe mostrar):
+
 - CLIP colapsaba el diálogo muy corto o solo de puntuación (p. ej. "……") hacia un embedding genérico, contaminando los rankings con puntajes altos espurios — corregido con un filtro de texto mínimo significativo.
 - NLLB perdía palabras clave (perdió "police" por completo) al traducir diálogo de manga tartamudeado ("ちょっ...ちょっと") — corregido agregando búsqueda por haces (beam search) y controles de repetición a la generación.
 - El proveedor de HF Inference ocasionalmente devolvía salidas malformadas: una vez una respuesta vacía disfrazada de llamada a herramienta, dos veces dos patrones diferentes de bucle de repetición (repetición simple de una palabra, y una cadena repetida con plantilla pero variando su contenido, que la detección por frecuencia de palabras inicialmente no detectó). Todo esto requirió reproducción real y encontrar la causa raíz, no solo envolver el síntoma en un reintento.
 - El intento de migración a LangChain/LangGraph (ver Tema, arriba) falló por completo para este modelo — un resultado negativo real, no un paso omitido.
 
 **Límites de este experimento:**
+
 - No se construyó un benchmark cuantitativo formal (hit-rate@k sobre una muestra de consultas representativa y no seleccionada a mano, o puntuación estilo RAGAS); la comparación anterior es real pero de N pequeño y seleccionada durante el desarrollo, no una muestra aleatoria.
 - El **recall** de recuperación es el principal modo de fallo, no la precisión: una respuesta correcta que no está en el subconjunto indexado simplemente no se encontrará, y el agente solo puede decirlo correctamente, no inventarla. Esto se evidenció directamente cuando solo 2 de los 87 libros estaban indexados.
 - La traducción de nombres de personajes no es confiable (NLLB no tiene un diccionario de nombres específico de manga), lo que puede hacer que una cita citada por el agente sea técnicamente correcta en significado pero incorrecta en el nombre exacto atribuido.
@@ -184,7 +187,7 @@ uv run anime-rag agent "What happens when a police officer shows up at someone's
   imagen.
 - `agent.py` implementa un agente de recuperación **MRKL + IRCoT** sobre
   `search.py`: una transcripción explícita estilo MRKL `Thought -> Action ->
-  Observation -> Final Answer` (`llm.py`, vía la API de HF Inference — la
+Observation -> Final Answer` (`llm.py`, vía la API de HF Inference — la
   única parte de este proyecto que no es local) impulsa una única
   herramienta `search_manga`, pero al estilo IRCoT, cada consulta de
   recuperación es el propio último paso de razonamiento del agente en lugar
