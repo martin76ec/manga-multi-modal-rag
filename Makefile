@@ -1,4 +1,4 @@
-.PHONY: install demo-index index-all test ask
+.PHONY: install demo-index index-all test ask eval
 
 BATCH_SIZE ?= 32
 
@@ -26,3 +26,12 @@ test: demo-index
 
 ask: demo-index
 	uv run anime-rag ask
+
+# RAGAS-style hit-rate/MRR + LLM-judge faithfulness/relevancy, swept over
+# retrieval blend and agent max_steps/top_k. Runs against whatever is
+# already indexed -- no re-indexing, no ragas package (see scripts/eval.py).
+# The eval cases need AisazuNihaIrarenai, DollGun, and
+# HanzaiKousyouninMinegishiEitarou specifically indexed (not just the
+# demo-index 2-book fixture), so this has no auto-index dependency.
+eval:
+	uv run python scripts/eval.py

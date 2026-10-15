@@ -34,9 +34,9 @@ Manga dialogue in Manga109-s is Japanese-only, and panels carry visual informati
 
 ### Comparison methodology and results
 
-No formal labeled benchmark (hit-rate@k, RAGAS) was built for this submission; that's a stated limitation (see Conclusions). Below is a comparison from real development-time queries, each checked against the actual panel image.
+`scripts/eval.py` now provides a small, repeatable quantitative check (`make eval`): hit-rate/MRR for retrieval (no LLM, RAGAS-style context precision/recall), and an LLM-judge faithfulness/relevancy score for the agent (RAGAS-style, using our own `ChatLLM`, not the `ragas` package, which hard-depends on LangChain internals and fails to import on the current stack). It's still small-N (2 verified cases) and development-selected, not a random sample; see Conclusions. The tables below are from development-time testing, mostly at the 2-book scale used early in the project.
 
-**Modality ablation** (query: `"police officer"`):
+**Modality ablation** (query: `"police officer"`, at 2-book scale):
 
 | Mode | Top-1 | Score | Verified correct? |
 |---|---|---|---|
@@ -44,7 +44,7 @@ No formal labeled benchmark (hit-rate@k, RAGAS) was built for this submission; t
 | Text-only | `AisazuNihaIrarenai_057` | 0.740 | yes, panel reads "ちょっと警察の方!!" |
 | Blended (default) | `AisazuNihaIrarenai_057` | 0.403 (`0.6x0.178 + 0.4x0.740`) | yes, checked by hand |
 
-Isolating either modality changes the ranking. Text carried more signal here; the blend keeps results robust for queries where the opposite holds (e.g. a purely visual one).
+Isolating either modality changes the ranking. Text carried more signal here; the blend keeps results robust for queries where the opposite holds (e.g. a purely visual one). Re-run at full scale (87 books) via `scripts/eval.py`, the blend still wins outright: sweeping `w_img` from 0.0 to 1.0 gives hit-rate 1.0 only at the default 0.6/0.4 (and 0.8/0.2), versus 0.0-0.5 everywhere else, with MRR peaking exactly at the default.
 
 **Baseline vs. agent:**
 
@@ -94,7 +94,7 @@ The agent's real advantage is saying "I don't know" instead of confidently retur
 - The LangChain/LangGraph attempt failed outright for this model, a real negative result.
 
 **Limits:**
-- No formal quantitative benchmark was built; the comparison above is real but small and not randomly sampled.
+- `scripts/eval.py` exists now but is tiny (2 verified cases) and development-selected, not a random or exhaustive sample.
 - Recall, not precision, is the main failure mode: evidence missing from the index simply can't be found.
 - Character-name translation is unreliable (no manga-specific dictionary).
 - Agent reliability partly depends on third-party provider behavior outside this project's control.
