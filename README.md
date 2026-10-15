@@ -121,39 +121,13 @@ Manga109-s is a gated dataset. Request access on the
 ## Usage
 
 ```bash
-# list the 87 available books
-uv run anime-rag books
-
-# extract + embed a few books (fetches only those books from the dataset zip,
-# via HTTP range reads, no need to download the full ~3GB archive)
-uv run anime-rag index AisazuNihaIrarenai ARMS
-
-# search in English: the query is auto-translated to Japanese before
-# embedding (the CLIP model and the dialogue are both Japanese-native), and
-# each result's dialogue is translated back to English for display
-uv run anime-rag search "police officer"
-
-# search in Japanese directly (skips translation, since it's detected)
-uv run anime-rag search "警察官"
-
-# search by image: finds visually similar panels
-uv run anime-rag search --image path/to/some_panel.jpg
-
-# tune the image/text score blend, save result crops for inspection
-uv run anime-rag search "missing son" --w-img 0.4 --w-text 0.6 --save-crops out/
-
-# skip translation entirely (faster startup if you're querying in Japanese)
-uv run anime-rag search "警察官" --no-translate
-
 # interactive REPL: loads models once, then take as many questions as you like.
 # menu-driven (search by text / by image / ask the agent / quit), colored
 # output, and an inline true-color thumbnail of the top result panel
 uv run anime-rag ask
-
-# agentic Q&A: a MRKL+IRCoT agent that issues its own retrieval queries over
-# several rounds and synthesizes a cited answer (needs HF Inference access)
-uv run anime-rag agent "What happens when a police officer shows up at someone's house?"
 ```
+
+![demo](demo.gif)
 
 ## How it works
 

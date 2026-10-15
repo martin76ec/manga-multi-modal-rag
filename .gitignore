@@ -11,3 +11,6 @@ wheels/
 
 # Manga109-s data and derived index (gated dataset, redistribution forbidden by license)
 /data/
+
+# raw asciinema recording used to generate demo.gif, not needed in the repo
+demo.cast
