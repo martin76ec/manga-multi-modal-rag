@@ -3,7 +3,7 @@
 Multimodal (Agentic) RAG over the [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s) manga dataset. Individual NLP course project.
 
 - **Code:** https://github.com/martin76ec/manga-multi-modal-rag
-- **Built index (embeddings + metadata, no images):** https://huggingface.co/datasets/martin76ec/Manga109-s-indexes
+- **Built index (CLIP embeddings + metadata, no raw image files):** https://huggingface.co/datasets/martin76ec/Manga109-s-indexes
 - **Demo video:** https://www.youtube.com/watch?v=bUYKq-7YVvg
 
 ## Course project overview
