@@ -14,3 +14,6 @@ wheels/
 
 # raw asciinema recording used to generate demo.gif, not needed in the repo
 demo.cast
+
+# secrets
+.env
