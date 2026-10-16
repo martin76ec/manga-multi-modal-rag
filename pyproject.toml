@@ -23,6 +23,7 @@ dependencies = [
     "torch>=2.14.1",
     "tqdm>=4.70.1",
     "transformers>=4.44,<5",
+    "typesafe-sdk>=0.7.5",
 ]
 
 [project.scripts]

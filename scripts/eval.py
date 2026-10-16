@@ -4,9 +4,14 @@ No `ragas` package: it hard-imports langchain_community internals at
 import time (confirmed broken against current langchain_community, and
 pulls in ~92 packages including the full LangChain stack this project
 deliberately avoids for the agent -- see README). Hit-rate/MRR cover the
-"RAGAS context precision/recall" idea for retrieval with zero LLM calls;
-the small LLM-judge scorer below covers faithfulness/relevancy the same
-way RAGAS would, using our own ChatLLM instead.
+"RAGAS context precision/recall" idea for retrieval with zero LLM calls.
+
+Faithfulness/relevancy are judged two ways:
+- judge_answer(): our own ChatLLM, text-only (evidence text + the agent's
+  own description), always available.
+- judge_answer_jev(): typesafe.ai's Jev model, which looks at the actual
+  cited panel IMAGES directly rather than trusting the agent's self-report
+  of what it saw. Needs TYPESAFE_API_KEY; skipped with a note if unset.
 
 Nothing here touches data/index/ -- hyperparameters are all applied at
 query time (w_img/w_text in search.py, max_steps/top_k in agent.py), so
@@ -17,6 +22,7 @@ books the eval cases below reference), not just any subset.
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,6 +133,43 @@ def judge_answer(llm: ChatLLM, question: str, evidence: str, answer: str) -> tup
     return faith, rel
 
 
+def judge_answer_jev(question: str, evidence: str, panel_image_paths: list[Path], answer: str) -> tuple[float, float] | None:
+    """Independent faithfulness/relevancy check via typesafe.ai's Jev,
+    looking at the actual cited panel images rather than trusting the
+    agent's own text description of what it saw. Returns None (with a
+    printed note) if TYPESAFE_API_KEY isn't set rather than failing the
+    whole eval run over an optional check."""
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        print("  (jev: TYPESAFE_API_KEY not set, skipping independent image verification)")
+        return None
+
+    from typesafe_sdk import Image, Noul, Score, TypeSafeClient
+
+    with TypeSafeClient() as client:
+        response = client.system_one(
+            state={
+                "question": question,
+                "cited_text_evidence": evidence,
+                "cited_panel_images": [Image(p) for p in panel_image_paths],
+                "answer": answer,
+            },
+            questions={
+                "faithfulness": Noul(
+                    instructions=(
+                        "Is every claim in `answer` actually supported by `cited_text_evidence` and "
+                        "what is visible in `cited_panel_images`? Answer no if anything is invented, "
+                        "contradicted, or not actually shown in the images."
+                    )
+                ),
+                "relevancy": Score(
+                    instructions="Does `answer` address `question`?",
+                    criteria=["does not address the question", "partially addresses it", "fully addresses it"],
+                ),
+            },
+        )
+    return response.answers["faithfulness"].noul, response.answers["relevancy"].score
+
+
 def sweep_agent(searcher: Searcher) -> None:
     print(f"\nAgent sweep, question: {AGENT_QUESTION!r}")
     judge_llm = ChatLLM()
@@ -140,8 +183,14 @@ def sweep_agent(searcher: Searcher) -> None:
         )
         faith, rel = judge_answer(judge_llm, AGENT_QUESTION, evidence or "(none)", result.answer)
         print(f"\ntop_k={top_k} max_steps={max_steps}: hit={hit} rounds_used={len(result.steps)}")
-        print(f"  faithfulness={faith} relevancy={rel}")
+        print(f"  ChatLLM judge (text-only): faithfulness={faith} relevancy={rel}")
         print(f"  answer: {result.answer[:160]}")
+
+        image_paths = [Path(r.meta["image_path"]) for r, _ in result.seen_panels]
+        jev_scores = judge_answer_jev(AGENT_QUESTION, evidence or "(none)", image_paths, result.answer)
+        if jev_scores is not None:
+            jev_faith, jev_rel = jev_scores
+            print(f"  Jev judge (sees actual images): faithfulness={jev_faith:.2f} relevancy={jev_rel:.2f}/2")
 
 
 def main() -> None:

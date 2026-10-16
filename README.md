@@ -34,7 +34,7 @@ Manga dialogue in Manga109-s is Japanese-only, and panels carry visual informati
 
 ### Comparison methodology and results
 
-`scripts/eval.py` now provides a small, repeatable quantitative check (`make eval`): hit-rate/MRR for retrieval (no LLM, RAGAS-style context precision/recall), and an LLM-judge faithfulness/relevancy score for the agent (RAGAS-style, using our own `ChatLLM`, not the `ragas` package, which hard-depends on LangChain internals and fails to import on the current stack). It's still small-N (2 verified cases) and development-selected, not a random sample; see Conclusions. The tables below are from development-time testing, mostly at the 2-book scale used early in the project.
+`scripts/eval.py` now provides a small, repeatable quantitative check (`make eval`): hit-rate/MRR for retrieval (no LLM, RAGAS-style context precision/recall), and faithfulness/relevancy for the agent (RAGAS-style, judged two ways, not the `ragas` package itself, which hard-depends on LangChain internals and fails to import on the current stack). One judge is our own `ChatLLM`, text-only. The other is [typesafe.ai](https://typesafe.ai)'s Jev model, which looks at the actual cited panel images directly instead of trusting the agent's own description, a real independent check rather than self-consistency (needs a `TYPESAFE_API_KEY`; skipped with a note otherwise). It's still small-N (2 verified cases) and development-selected, not a random sample; see Conclusions. The tables below are from development-time testing, mostly at the 2-book scale used early in the project.
 
 **Modality ablation** (query: `"police officer"`, at 2-book scale):
 
