@@ -27,7 +27,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+load_dotenv()  # picks up TYPESAFE_API_KEY from .env; neither uv run nor the SDK does this on its own
 
 from anime_rag.agent import MrklIrcotAgent
 from anime_rag.embedder import ClipJapaneseEmbedder
@@ -133,6 +136,33 @@ def judge_answer(llm: ChatLLM, question: str, evidence: str, answer: str) -> tup
     return faith, rel
 
 
+JEV_MIN_SIDE = 280
+JEV_MAX_SIDE = 1568
+
+
+def _jev_image_bytes(path: Path) -> bytes:
+    """Jev requires each image side to be 280-1568px; manga panel crops are
+    often narrower than that (confirmed: a real crop was 210x348 and got
+    rejected with 'Invalid image dimensions'), so upscale small ones rather
+    than send them as-is and have the call fail."""
+    from io import BytesIO
+
+    from PIL import Image as PILImage
+
+    img = PILImage.open(path).convert("RGB")
+    w, h = img.size
+    scale = 1.0
+    if min(w, h) < JEV_MIN_SIDE:
+        scale = JEV_MIN_SIDE / min(w, h)
+    elif max(w, h) > JEV_MAX_SIDE:
+        scale = JEV_MAX_SIDE / max(w, h)
+    if scale != 1.0:
+        img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))))
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    return buf.getvalue()
+
+
 def judge_answer_jev(question: str, evidence: str, panel_image_paths: list[Path], answer: str) -> tuple[float, float] | None:
     """Independent faithfulness/relevancy check via typesafe.ai's Jev,
     looking at the actual cited panel images rather than trusting the
@@ -150,7 +180,7 @@ def judge_answer_jev(question: str, evidence: str, panel_image_paths: list[Path]
             state={
                 "question": question,
                 "cited_text_evidence": evidence,
-                "cited_panel_images": [Image(p) for p in panel_image_paths],
+                "cited_panel_images": [Image(_jev_image_bytes(p)) for p in panel_image_paths],
                 "answer": answer,
             },
             questions={
@@ -166,6 +196,8 @@ def judge_answer_jev(question: str, evidence: str, panel_image_paths: list[Path]
                     criteria=["does not address the question", "partially addresses it", "fully addresses it"],
                 ),
             },
+            # images are an experimental Jev feature and require this opt-in header
+            extra_headers={"TypeSafe-Danger-Zone-Images": "true"},
         )
     return response.answers["faithfulness"].noul, response.answers["relevancy"].score
 

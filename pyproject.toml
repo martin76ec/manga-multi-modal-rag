@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=2.5.3",
     "pillow>=12.3.0",
     "pyarrow>=26.0.0",
+    "python-dotenv>=1.2.4",
     "requests>=2.34.2",
     "rich>=15.0.0",
     "rich-pixels>=3.0.1",

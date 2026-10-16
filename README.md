@@ -34,7 +34,7 @@ Manga dialogue in Manga109-s is Japanese-only, and panels carry visual informati
 
 ### Comparison methodology and results
 
-`scripts/eval.py` now provides a small, repeatable quantitative check (`make eval`): hit-rate/MRR for retrieval (no LLM, RAGAS-style context precision/recall), and faithfulness/relevancy for the agent (RAGAS-style, judged two ways, not the `ragas` package itself, which hard-depends on LangChain internals and fails to import on the current stack). One judge is our own `ChatLLM`, text-only. The other is [typesafe.ai](https://typesafe.ai)'s Jev model, which looks at the actual cited panel images directly instead of trusting the agent's own description, a real independent check rather than self-consistency (needs a `TYPESAFE_API_KEY`; skipped with a note otherwise). It's still small-N (2 verified cases) and development-selected, not a random sample; see Conclusions. The tables below are from development-time testing, mostly at the 2-book scale used early in the project.
+`scripts/eval.py` now provides a small, repeatable quantitative check (`make eval`): hit-rate/MRR for retrieval (no LLM, RAGAS-style context precision/recall), and faithfulness/relevancy for the agent (RAGAS-style, judged two ways, not the `ragas` package itself, which hard-depends on LangChain internals and fails to import on the current stack). One judge is our own `ChatLLM`, text-only. The other is [typesafe.ai](https://typesafe.ai)'s Jev model, which looks at the actual cited panel images directly instead of trusting the agent's own description (needs a `TYPESAFE_API_KEY`; skipped with a note otherwise). Running both for real on the same two answers showed why that distinction matters: `ChatLLM` gave a flat 5/5 on both, while Jev gave differentiated, lower scores (0.54-0.68 faithfulness, 0.70-1.06/2 relevancy) and correctly scored an honest "I don't know" answer as low-relevancy since it doesn't actually address the question, a real check the text-only judge missed. It's still small-N (2 verified cases) and development-selected, not a random sample; see Conclusions. The tables below are from development-time testing, mostly at the 2-book scale used early in the project.
 
 **Modality ablation** (query: `"police officer"`, at 2-book scale):
 
@@ -86,6 +86,7 @@ The agent's real advantage is saying "I don't know" instead of confidently retur
 - The translation bridge makes the system usable without Japanese, fully local, no API key.
 - The agent's vision is not cosmetic: it found and described a detail ("a Glock handgun") the dialogue never mentioned.
 - The agent consistently abstained instead of hallucinating a plausible wrong answer, which matters most for a citation-grounded tool.
+- A self-judging text-only grader rubber-stamps: `ChatLLM` scored two different answers a flat 5/5. An independent image-based judge (Jev) scored the same two 0.54-0.68, and correctly penalized the honest "I don't know" one for low relevancy.
 
 **What didn't work, fixed along the way:**
 - CLIP collapsed very short dialogue (e.g. "……") into a generic embedding; fixed with a minimum-text filter.
