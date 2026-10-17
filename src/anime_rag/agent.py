@@ -77,11 +77,24 @@ class AgentResult:
 
 
 class MrklIrcotAgent:
-    def __init__(self, searcher: Searcher, llm: ChatLLM | None = None, max_steps: int = 4, top_k: int = 3):
+    def __init__(
+        self,
+        searcher: Searcher,
+        llm: ChatLLM | None = None,
+        max_steps: int = 4,
+        top_k: int = 3,
+        ircot: bool = True,
+    ):
         self.searcher = searcher
         self.llm = llm or ChatLLM()
         self.max_steps = max_steps
         self.top_k = top_k
+        # ircot=False is an ablation, not a real mode to ship: every round
+        # re-searches the literal original question instead of the agent's
+        # own latest reasoning step, isolating whether IRCoT's query
+        # reformulation is actually what multi-hop questions benefit from,
+        # versus just "ask more than once" (see scripts/eval.py sweep).
+        self.ircot = ircot
 
     @staticmethod
     def _encode_image(path: Path) -> str:
@@ -149,7 +162,7 @@ class MrklIrcotAgent:
                 messages.append({"role": "user", "content": REPROMPT_MESSAGE})
                 continue
 
-            query = action_match.group(1).strip().strip('"')
+            query = question if not self.ircot else action_match.group(1).strip().strip('"')
             content, observation_text, panels = self._observe(query)
             for r, t in panels:
                 pid = r.meta["id"]

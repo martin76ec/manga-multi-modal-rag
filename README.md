@@ -1,114 +1,220 @@
 # anime-rag
 
+**Author: Martin Larrea (martin76ec)
+
 Multimodal (Agentic) RAG over the [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s) manga dataset. Individual NLP course project.
 
 - **Code:** https://github.com/martin76ec/manga-multi-modal-rag
-- **Built index (CLIP embeddings + metadata, no raw image files):** https://huggingface.co/datasets/martin76ec/Manga109-s-indexes
+- **Embeddings:** https://huggingface.co/datasets/martin76ec/Manga109-s-indexes
 - **Demo video:** https://www.youtube.com/watch?v=bUYKq-7YVvg
 
-## Course project overview
+## Project Overview
 
 ### Topic
 
-**RAG / Agentic RAG.** Not built with LangChain/LangGraph. This is a deliberate, tested deviation, not an oversight:
+**Multimodal Agentic RAG.**
 
-- `google/gemma-4-26B-A4B-it` (needed for vision, so the agent can judge a panel directly, not just via translated dialogue) does not reliably use native tool-calling. Confirmed with the raw HF Inference API, bypassing LangChain entirely: given a registered tool, it just answered in plain text claiming it had none.
-- Wiring it into LangGraph's `create_react_agent` was worse: it hallucinated a complete fake tool call, with a fabricated URL and fictional data.
-- Models that do tool-call reliably on the free providers I have access to (`Llama-3.3-70B`, `Qwen2.5-72B`) are text-only. The one vision+tool-calling model I found (`Qwen2.5-VL-32B`) also ignored the tool and hallucinated an answer.
+[!Note]
+This project is not built with LangChain and Ragas. The chosen available model (gemma4) was not good enough at output formatting, tool calling and consistently failed.
+LangChain was replaced with a simpler custom MRKL.
 
-No model available to me does both reliably at once. The hand-built agent in `agent.py` (MRKL-style `Thought -> Action -> Observation -> Final Answer`, plain-text prompted, with retry/degeneration detection added after real provider failures) is the result of testing LangChain and finding it less reliable here, not a workaround for skipping it.
-
-### Problem and data
+### Problem and Data
 
 Manga dialogue in Manga109-s is Japanese-only, and panels carry visual information the transcribed text often doesn't describe. Goal: let someone who doesn't read Japanese ask a question in English and get an answer grounded in cited panels, using both artwork and dialogue.
 
-**Data:** [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s) (gated), 87 licensed manga volumes with page images and per-panel annotations. Fully indexed: **87 books, 82,124 panels**.
+**Data:** [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s), 87 licensed manga volumes with page images and per-panel annotations. Fully indexed: **87 books, 82,124 panels**.
+
+### Data preparation
+
+One real panel end to end (`DollGun_079_00011f25`, book `DollGun`, page 79):
+
+1. **Crop.** The book's XML annotation gives a frame bounding box `[1084, 756, 1294, 1104]` (x0, y0, x1, y1) on the raw page image (`data/raw/images/DollGun/079.jpg`). `panels.py` crops that box out and attaches the dialogue text box and character boxes whose coordinates fall inside it, producing one crop file (`data/raw/crops/DollGun/DollGun_079_00011f25.jpg`) with its dialogue and character name attached.
+
+2. **Translate.** The attached dialogue is Japanese: `くッ・・・撃ち尽くしたのかよッ!!?`. `translate.py` runs it through NLLB-200 (beam search 4, repetition penalty 1.3) for display: `"Shit, did you just shoot him?"`. The same model runs the other direction at query time, since the CLIP model and the dialogue are both Japanese-native: the English query `"someone holding a gun"` becomes `"銃を握っている人"` before embedding.
+
+3. **Embed.** `embedder.py` runs the Japanese CLIP model on the crop image and on its Japanese dialogue text separately, giving two 512-dim vectors in the same space:
+   - `image_emb[:8] = [-0.0304, -0.0483, 0.0192, 0.0039, -0.0503, -0.0297, -0.0106, -0.0303]`
+   - `text_emb[:8]  = [-0.0473, 0.0111, -0.0193, -0.0085, -0.0190, -0.0422, -0.0416, 0.0035]`
+
+   Both get written to the index (one row per panel, 82,124 rows at full scale) alongside the metadata above. Panels whose dialogue is empty or under 3 word characters (e.g. "……") skip the text embedding and fall back to image-only scoring (see "What didn't work" below for why).
 
 ### Baseline vs. proposed solution
 
-| | Baseline | Proposed |
-|---|---|---|
-| Retrieval | single modality: text-only or image-only CLIP similarity | blended score (`0.6 image + 0.4 text`, tunable) over the same embeddings |
-| Query language | Japanese only | English or Japanese (NLLB-200 translation bridge) |
-| Answering | top-k panels returned directly | MRKL+IRCoT agent: multi-round, vision-grounded, cites book/page, says "I don't know" instead of guessing |
+|                | Baseline                                                 | Proposed                                                                                                 |
+| -------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Retrieval      | single modality: text-only or image-only CLIP similarity | blended score (`0.6 image + 0.4 text`, tunable) over the same embeddings                                 |
+| Query language | Japanese only                                            | English or Japanese (NLLB-200 translation bridge)                                                        |
+| Answering      | top-k panels returned directly                           | MRKL+IRCoT agent: multi-round, vision-grounded, cites book/page, says "I don't know" instead of guessing |
+
+### Example input/output
+
+**Baseline retrieval** (`uv run anime-rag search "someone holding a gun" --top-k 1`):
+
+- input (English): `someone holding a gun`
+- translated query (Japanese, what actually gets embedded): `銃を握っている人`
+- output:
+  ```
+  #0 [0.478] HanzaiKousyouninMinegishiEitarou p.010 (HanzaiKousyouninMinegishiEitarou_010_0001e8c4)
+      img=0.295 text=0.753  chars: 晶海
+      text (ja): あれは・・・・ / 拳銃のにおいです・・・
+      text (en): That's the smell of a gun.
+      crop:  data/raw/crops/HanzaiKousyouninMinegishiEitarou/HanzaiKousyouninMinegishiEitarou_010_0001e8c4.jpg
+      page:  data/raw/images/HanzaiKousyouninMinegishiEitarou/010.jpg
+  ```
+
+**Agent** (`uv run anime-rag agent "What happens when a police officer shows up at someone's house?" --top-k 2 --max-steps 3`), real transcript:
+
+```
+input: What happens when a police officer shows up at someone's house?
+
+--- step 0 ---
+Thought: I need to search for a scene where a police officer arrives at a
+person's house to see what happens next.
+Action: search_manga
+Action Input: a police officer showing up at someone's house
+
+Observation (2 panels):
+#0 HanzaiKousyouninMinegishiEitarou p.096: "That's when the police can
+   tell the killer from the hostage."
+#1 TennenSenshiG p.051: "Excuse me, I'm a police officer. I'd like to
+   ask you a few questions."
+
+--- step 1 ---
+Thought: The search results provide two different contexts. [...] I have
+enough information to answer based on the direct interaction in
+TennenSenshiG.
+Final Answer: In TennenSenshiG p.051, a police officer arrives and says
+they would like to ask some questions.
+```
 
 ### Comparison methodology and results
 
-`scripts/eval.py` now provides a small, repeatable quantitative check (`make eval`): hit-rate/MRR for retrieval (no LLM, RAGAS-style context precision/recall), and faithfulness/relevancy for the agent (RAGAS-style, judged two ways, not the `ragas` package itself, which hard-depends on LangChain internals and fails to import on the current stack). One judge is our own `ChatLLM`, text-only. The other is [typesafe.ai](https://typesafe.ai)'s Jev model, which looks at the actual cited panel images directly instead of trusting the agent's own description (needs a `TYPESAFE_API_KEY`; skipped with a note otherwise). Running both for real on the same answers showed why that distinction matters: `ChatLLM` reliably gives a flat 5/5 regardless of answer quality (self-judging rubber stamp), while Jev gives differentiated, lower scores and correctly rates a declined answer as low-relevancy since it doesn't actually address the question, a real check the text-only judge missed.
+This project meassure hit-rate/MRR for retrieval, and faithfulness/relevancy for the agent.
+There are two judges:
 
-Cases span a deliberate difficulty spectrum rather than being similar queries padded for count: 1 near-trivial exact-match retrieval case, 2 single-concept ones, 1 semantic/thematic one (Jev-verified, not pixel-checked), and 3 agent-only multi-hop/adversarial questions. Not all are expected to pass: one complex question is a confirmed, honest miss (the real answer exists in the full index but doesn't surface in top-3 for that phrasing within 4 rounds) and one is deliberately unanswerable (an anachronistic question with no correct answer in ~20-40 year old manga), both included specifically to check the agent declines rather than hallucinates, which it does in both cases. It's still small-N and development-selected, not a random sample; see Conclusions. The tables below are from development-time testing, mostly at the 2-book scale used early in the project.
+1. Custom ChatLLM (replacement for langchain and ragas as mentioned before), text-only.
+2. Jev (from Typesafe) model, which looks at the actual cited panel images directly instead of trusting the agent's own description. Running both for real on the same answers showed why that distinction matters: ChatLLM reliably gives a flat 5/5 regardless of answer quality, while Jev gives differentiated, lower scores and correctly rates a declined answer as low relevancy.
 
-**Modality ablation** (query: `"police officer"`, at 2-book scale):
+The cases to test are a set of questions spanning difficulty tiers, mined for real across ~15 different books (not hand-picked from 1-2), each with a recorded verification method (metadata, literal text match, visual inspection, or Jev):
 
-| Mode | Top-1 | Score | Verified correct? |
-|---|---|---|---|
-| Image-only | `AisazuNihaIrarenai_007` | 0.256 | not independently verified, weaker signal |
-| Text-only | `AisazuNihaIrarenai_057` | 0.740 | yes, panel reads "ちょっと警察の方!!" |
-| Blended (default) | `AisazuNihaIrarenai_057` | 0.403 (`0.6x0.178 + 0.4x0.740`) | yes, checked by hand |
+- very_simple/simple (10): exact or near-exact literal match (a character name, a term that appears verbatim in the matching dialogue)
+- moderate (7): semantic queries worded differently from the matching dialogue, verified against what the dialogue actually says
+- hard (2): genuinely visual, confirmed by viewing the crop image since the dialogue alone doesn't give the answer away
+- complex/very_complex (4, agent-only): multi-hop and adversarial questions a single retrieval can't answer
 
-Isolating either modality changes the ranking. Text carried more signal here; the blend keeps results robust for queries where the opposite holds (e.g. a purely visual one). Re-run at full scale (87 books) via `scripts/eval.py`, the blend still wins outright: sweeping `w_img` from 0.0 to 1.0 gives hit-rate 1.0 only at the default 0.6/0.4 (and 0.8/0.2), versus 0.0-0.5 everywhere else, with MRR peaking exactly at the default.
+**Modality** (query: `"police officer"`, at 2-book scale):
+
+| Mode              | Top-1                    | Score | Verified correct?                         |
+| ----------------- | ------------------------ | ----- | ----------------------------------------- |
+| Image-only        | `AisazuNihaIrarenai_007` | 0.256 | not independently verified, weaker signal |
+| Text-only         | `AisazuNihaIrarenai_057` | 0.740 | yes, panel reads "ちょっと警察の方!!"     |
+| Blended (default) | `AisazuNihaIrarenai_057` | 0.403 | yes, checked by hand                      |
+
+Isolating either modality changes the ranking. Text carried more signal here:
+
+| w_img   | w_text            | hit-rate | MRR      |
+| ------- | ----------------- | -------- | -------- |
+| 0.0     | 1.0               | 0.67     | 0.52     |
+| 0.2     | 0.8               | 0.72     | 0.55     |
+| 0.4     | 0.6               | 0.83     | 0.73     |
+| **0.6** | **0.4** (default) | **0.94** | **0.84** |
+| 0.8     | 0.2               | 0.56     | 0.30     |
+| 1.0     | 0.0               | 0.00     | 0.00     |
+
+The default wins outright on both metrics, more convincingly than the earlier 4 case version of this sweep suggested.
+
+**HyDE**:
+
+| Method           | hit-rate | MRR  |
+| ---------------- | -------- | ---- |
+| Direct (default) | 0.94     | 0.84 |
+| HyDE             | 0.11     | 0.11 |
+
+A real negative result: the generated hypothetical dialogue was stylistically plausible ("ドールガン" -> "撃てッ！", i.e. "Fire!") but generic, not close to the actual specific indexed dialogue. Most of this project's queries are literal names or terms, which HyDE's generated paraphrase works against rather than for. Not adopted.
 
 **Baseline vs. agent:**
 
-| Query | Baseline | Agent |
-|---|---|---|
-| "police officer" | correct top-1, single shot | same, 1 round |
-| "What happens when a police officer shows up at someone's house?" | needs the user to already know the right search term | finds and cites the same panel unprompted, with a grounded answer |
-| "someone holding a gun" (no real match indexed) | returns a plausible but wrong top result | correctly reports no match found |
-| "someone holding a gun" (real match indexed) | finds the panel, no explanation | finds it and visually confirms it ("a Glock handgun"), a detail the text doesn't mention |
-| multi-hop father/parenting question | can't answer at all | 4 self-generated retrieval rounds, found the father, then honestly declined to confirm a mistranslated detail instead of guessing |
+| Query                                                             | Baseline                                             | Agent                                                                                                                             |
+| ----------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| "police officer"                                                  | correct top-1, single shot                           | same, 1 round                                                                                                                     |
+| "What happens when a police officer shows up at someone's house?" | needs the user to already know the right search term | finds and cites the same panel unprompted, with a grounded answer                                                                 |
+| "someone holding a gun" (no real match indexed)                   | returns a plausible but wrong top result             | correctly reports no match found                                                                                                  |
+| "someone holding a gun" (real match indexed)                      | finds the panel, no explanation                      | finds it and visually confirms it ("a Glock handgun"), a detail the text doesn't mention                                          |
+| multi-hop father/parenting question                               | can't answer at all                                  | 4 self-generated retrieval rounds, found the father, then honestly declined to confirm a mistranslated detail instead of guessing |
 
 The agent's real advantage is saying "I don't know" instead of confidently returning a wrong top-1, and chaining queries for questions that need more than one search. That costs more (next section), so it's a trade-off, not a strict upgrade.
 
-### Cost comparison
+**Agent LLM comparison** (same question, same `top_k=2, max_steps=3`, real runs):
 
-| | Baseline | Agent |
-|---|---|---|
-| Where it runs | fully local | retrieval local, reasoning via HF Inference API (network, third party) |
-| LLM calls/question | 0 | up to 5 (`max_steps=4` + forced final) |
-| Tokens/call | 0 | `max_tokens=250`, plus growing conversation history |
-| Images sent | 0 | up to 3 panels/round x 4 rounds, 384px JPEG |
-| Latency | sub-second | tens of seconds |
-| Monetary cost | none | HF free tier (hit a 429 rate limit once) |
+|                    | `gemma-4-26B-A4B-it`                                         | `Muse-Spark-Open-816B-A42B`                                                                                                          |
+| ------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Reasoning quality  | stops after 1 search round, answers from a single weak match | uses all 3 rounds, reformulates the query each time, synthesizes several panels, flags its own uncertainty instead of overcommitting |
+| Vision             | reliable                                                     | reliable                                                                                                                             |
+| Format reliability | follows the Thought/Action scaffold at `max_tokens=250`      | needs `max_tokens` raised to 1200                                                                                                    |
+| Token cost         | 250 tokens per call, 2 calls for this question               | 1500 completion tokens total across 4 calls (60-80% hidden reasoning), roughly 10x                                                   |
 
-**Local compute/storage (shared by both modes):**
+Genuinely better-calibrated reasoning, but at roughly 10x the token cost and with dependency/format problems that have no clean fix inside this project's current stack. Not a drop-in upgrade, so the shipped agent stays on Gemma-4.
 
-| | Value |
-|---|---|
-| Panels indexed | 82,124 (87 books) |
-| Embedding throughput | ~58 panels/sec (shared RTX 4060 Ti, 8GB) |
-| Local models | CLIP Japanese (~790MB), NLLB-200 (~2.4GB), both free |
-| Index size | 380.5MB (one Parquet file) |
-| Raw data on disk | ~7.8GB |
+**IRCoT ablation** (does letting each round's query be the agent's own reasoning step, vs. always re-searching the literal original question, actually help?), same multi-hop question, `top_k=3, max_steps=4`, one real run each:
+
+| Mode                                 | Hit | ChatLLM faithfulness | Answer                                                               |
+| ------------------------------------ | --- | -------------------- | -------------------------------------------------------------------- |
+| `ircot=True` (default)               | No  | 2/5                  | attempted a multi scenario answer the judge flagged as less faithful |
+| `ircot=False` (fixed original query) | No  | 5/5                  | declined cleanly ("panels do not contain information...")            |
+
+Neither hit the groundtruth panels. In this one run, forcing the fixed query produced a cleaner decline rather than a worse, over reaching answer. One run isn't enough to conclude IRCoT's reformulation hurts in general, and the same config produced different ChatLLM scores across separate runs in this eval pass (5/5 earlier in the single-config sweep above, 2/5 here), which is itself worth flagging: this evaluation has real run-to-run variance from the LLM call, not just from the hyperparameter being changed. Kept IRCoT on by default (it's still the only thing that found the right panel unprompted for the simpler "police officer" case elsewhere in this doc), but this result is a real counterexample to assuming more reformulation always helps, not swept away.
+
+### Cost Comparison
+
+|                    | Baseline    | Agent                                               |
+| ------------------ | ----------- | --------------------------------------------------- |
+| Where it runs      | fully local | retrieval local, reasoning with HF Inference        |
+| LLM calls/question | 0           | up to 5 (`max_steps=4` + forced final)              |
+| Tokens/call        | 0           | `max_tokens=250`, plus growing conversation history |
+| Images sent        | 0           | 4 rounds with 3 max each one 384px (approx)         |
+| Latency            | sub-second  | tens of seconds                                     |
+| Monetary cost      | none        | HF free tier (hit a 429 rate limit once)            |
+
+**Local resources:**
+
+|                      | Value                                              |
+| -------------------- | -------------------------------------------------- |
+| Panels indexed       | 82,124                                             |
+| Embedding throughput | 58 panels/sec (shared RTX 4060 Ti, 8GB)            |
+| Local models         | CLIP Japanese (790MB), NLLB-200 (2.4GB), both free |
+| Index size           | 380.5MB (one Parquet file)                         |
+| Raw data on disk     | 7.8GB                                              |
 
 ### Conclusions
 
 **What worked:**
+
 - Blending image and text embeddings changes outcomes versus either alone, verified by hand.
 - The translation bridge makes the system usable without Japanese, fully local, no API key.
-- The agent's vision is not cosmetic: it found and described a detail ("a Glock handgun") the dialogue never mentioned.
-- The agent consistently abstained instead of hallucinating a plausible wrong answer, which matters most for a citation-grounded tool.
-- A self-judging text-only grader rubber-stamps: `ChatLLM` scored two different answers a flat 5/5. An independent image-based judge (Jev) scored the same two 0.54-0.68, and correctly penalized the honest "I don't know" one for low relevancy.
+- The agent's vision is able to describe image details like "a Glock handgun" the dialogue never mentioned.
+- The agent consistently abstained instead of hallucinating a plausible wrong answer.
+- The custom ChatLLM scored two different answers a flat 5/5. An independent image judge (Jev) scored the same two 0.54-0.68, and correctly penalized the honest "I don't know" one for low relevancy.
 
-**What didn't work, fixed along the way:**
-- CLIP collapsed very short dialogue (e.g. "……") into a generic embedding; fixed with a minimum-text filter.
+**Improvement Opportunities:**
+
+- CLIP collapsed very short dialogue into a generic embedding; fixed with a minimum text filter.
 - NLLB dropped key words translating stuttering dialogue; fixed with beam search and repetition controls.
-- The HF provider occasionally returned malformed output: once a fake empty tool-call, twice different repetition-loop patterns. Each required real reproduction and root-causing.
+- The HF provider occasionally returned malformed output: once a fake empty tool call, twice different repetition loop patterns.
 - The LangChain/LangGraph attempt failed outright for this model, a real negative result.
+- Muse shows an upgrade with real reasoning quality gain, but is 10x expensive than gemma4.
+- Tried HyDE: hit-rate/MRR collapsed from 0.94/0.84 to 0.11/0.11. Generated dialogue was plausible sounding but generic, which hurts on a corpus where most queries are literal terms. Not adopted.
+- The agent still misses retrieval the plain baseline nails: a "dog barking outdoors" question the direct search answers correctly in one shot wasn't found by the agent in 3 rounds, a concrete instance of the recall gap below.
 
 **Limits:**
-- `scripts/eval.py` exists now but is still small (4 retrieval + 3 agent cases) and development-selected, not a random or exhaustive sample.
-- Recall, not precision, is the main failure mode: evidence missing from the index simply can't be found.
-- Character-name translation is unreliable (no manga-specific dictionary).
-- Agent reliability partly depends on third-party provider behavior outside this project's control.
+
+- `scripts/eval.py` now has 18 retrieval and 5 agent cases, each with a recorded verification method, but it's still development selected, not a random or exhaustive sample.
+- Recall, not precision, is the main failure mode: evidence missing from the index simply can't be found, and even when it's present the agent doesn't always reformulate its way to it.
+- Character name translation is unreliable.
+- Agent eval has real run-to-run variance: the same question with the same configuration of hyper params produced different ChatLLM judge scores (5/5 vs 2/5) across two separate runs in this eval pass, since each run calls the hosted LLM fresh. Single runs here are illustrative, not statistically stable.
 
 ### AI-generated content declaration
 
-Built with extensive assistance from Claude (Anthropic) as an engineering collaborator: architecture, implementation, debugging real failures, and this documentation. Design decisions and acceptance of each change were mine; the AI did the hands-on work under that direction, and its claims were verified against real run output, not taken at face value. Adjust this section for your institution's disclosure policy before submitting.
-
-### Presentation (5 min + 3 min Q&A)
-
-Suggested flow: problem/data (30s), topic and the LangChain/LangGraph finding (45s), live demo of `anime-rag ask` (2 min), comparison and cost tables (1 min), conclusions/limits (45s).
+Built with extensive assistance from Claude as an engineering collaborator: architecture, implementation, debugging failures, and part of this documentation. Design decisions and acceptance of each change were mine; the AI did the hands-on work under that direction, and its claims were verified against real run output.
 
 ---
 
@@ -116,7 +222,7 @@ Suggested flow: problem/data (30s), topic and the LangChain/LangGraph finding (4
 
 ```bash
 uv sync
-hf auth login                 # needed once, for the gated dataset
+hf auth login
 ```
 
 Manga109-s is a gated dataset. Request access on the
@@ -125,114 +231,10 @@ Manga109-s is a gated dataset. Request access on the
 ## Usage
 
 ```bash
-# interactive REPL: loads models once, then take as many questions as you like.
-# menu-driven (search by text / by image / ask the agent / quit), colored
-# output, and an inline true-color thumbnail of the top result panel
 uv run anime-rag ask
 ```
 
 ![demo](demo.gif)
-
-## How it works
-
-- `source.py` opens the dataset's zip archive through `HfFileSystem` and extracts
-  only the requested books' images/annotations (partial HTTP range reads).
-- `annotations.py` parses each book's Manga109 XML into pages of frames
-  (panels), text boxes, and character face/body boxes.
-- `panels.py` crops one image per frame and associates it with the dialogue
-  text and character names whose boxes fall inside that frame.
-- `embedder.py` wraps the Japanese CLIP model to embed panel crops and text
-  into a shared space.
-- `translate.py` translates English queries to Japanese before embedding,
-  and Japanese result dialogue back to English for display, via
-  `facebook/nllb-200-distilled-600M` (local, no API key needed).
-- `indexing.py` builds and persists a per-book index (embeddings + metadata)
-  under `data/index/`.
-- `search.py` ranks panels for a query by a weighted blend of
-  image-embedding and text-embedding cosine similarity. Panels whose
-  dialogue is empty or too short to embed meaningfully (e.g. "……") fall back
-  to image-only scoring.
-- `agent.py` implements a **MRKL + IRCoT** retrieval agent on top of
-  `search.py`: a MRKL-style explicit `Thought -> Action -> Observation ->
-  Final Answer` transcript (`llm.py`, via the HF Inference API, the only
-  part of this project that's not local) drives a single `search_manga`
-  tool, but IRCoT-style, each retrieval query is the agent's own latest
-  reasoning step rather than a fixed query, so it can chase multi-hop
-  questions across several retrieval rounds and still ground its answer in
-  cited book/page evidence (or admit it doesn't know, instead of guessing).
-  The LLM (`google/gemma-4-26B-A4B-it`) is vision-capable, so each
-  Observation includes the actual panel images, not just translated
-  dialogue; it can judge what's visually happening in a panel even when
-  the dialogue doesn't describe it.
-
-Downloaded data and built indices live under `data/` (gitignored). The
-dataset license forbids redistribution.
-
-`anime-rag agent` calls the Hugging Face Inference API (model:
-`google/gemma-4-26B-A4B-it` by default) and needs network access plus an HF
-token with inference access (`hf auth login`); everything else in this
-project (embedding, translation, indexing) runs fully locally.
-
-## Indexing the full dataset (e.g. on a bigger GPU)
-
-The dataset has 87 books (82,124 panels total once all are indexed). Embedding
-that locally on a small/shared GPU takes a while, so on a bigger box (this
-was written with an H200 in mind):
-
-```bash
-# on the bigger machine: clone this repo, then
-uv sync
-hf auth login                      # needs Manga109-s access
-
-# index every book in one go; bump --batch-size way up on a big GPU
-uv run anime-rag index --all --batch-size 256
-
-# or, as a single script (also pushes the result to HF when given a repo id):
-./scripts/h200_index_all.sh yourname/manga109-rag-index
-```
-
-`--all` opens the dataset zip once and indexes everything it finds via
-`anime-rag books`, skipping any book already indexed (safe to re-run /
-resume after an interruption).
-
-### Moving the index to another machine
-
-`push-index`/`pull-index` upload/download **only the built index**
-(embeddings + metadata) via a HF dataset repo. It never includes the actual
-panel crop images, which live in a separate directory (`data/raw/crops/`)
-the license is stricter about: this is derived numeric output, analogous to
-publishing a pretrained model, not a copy of the dataset itself (see the
-license note below). Push it **private** (this project's own index, linked
-above, is public by request).
-
-The index is consolidated into a single `index.parquet` file before
-uploading. Parquet is the standard single-file format for embeddings +
-metadata (what HF's own `datasets` library uses), and far easier to move
-around than one directory per book (87 books = 348 small files otherwise).
-`pull-index` downloads that one file and transparently re-splits it back
-into the usual `data/index/<book>/` layout, so nothing else changes.
-
-```bash
-# on the box that built the index
-uv run anime-rag push-index yourname/manga109-rag-index
-
-# if you previously pushed with an older version of this tool that uploaded
-# the raw per-book folders instead of a single file, add --clean once to
-# remove that old structure from the repo after the parquet file is up
-uv run anime-rag push-index yourname/manga109-rag-index --clean
-
-# on another machine
-uv run anime-rag pull-index yourname/manga109-rag-index
-
-# the pulled index has no crop images yet, regenerate them locally
-# (re-extracts raw pages from the dataset zip, crops them; no GPU/model
-# inference involved, so it's cheap even without the bigger box)
-uv run anime-rag crops
-```
-
-Search/citations work immediately after `pull-index` (it's pure embedding
-math); you only need `anime-rag crops` once you want to actually view a
-result's panel image or use the vision-capable agent.
 
 ## License note
 

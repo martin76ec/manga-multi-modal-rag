@@ -28,10 +28,11 @@ ask: demo-index
 	uv run anime-rag ask
 
 # RAGAS-style hit-rate/MRR + LLM-judge faithfulness/relevancy, swept over
-# retrieval blend and agent max_steps/top_k. Runs against whatever is
-# already indexed -- no re-indexing, no ragas package (see scripts/eval.py).
-# The eval cases need AisazuNihaIrarenai, DollGun, and
-# HanzaiKousyouninMinegishiEitarou specifically indexed (not just the
-# demo-index 2-book fixture), so this has no auto-index dependency.
+# retrieval blend, agent max_steps/top_k, and the HyDE/IRCoT ablations.
+# Runs against whatever is already indexed -- no re-indexing, no ragas
+# package (see scripts/eval.py). The eval cases now span ~15 different
+# books (not just a couple), so this needs the full `index-all` dataset,
+# not the demo-index 2-book fixture -- no auto-index dependency here since
+# that's a much bigger prerequisite than `test`/`ask` need.
 eval:
 	uv run python scripts/eval.py

@@ -77,6 +77,19 @@ class Searcher:
         query_emb = self.embedder.embed_image(image)
         return self._rank(query_emb, top_k, w_img, w_text)
 
+    def search_by_text_embedding(
+        self, japanese_text: str, top_k: int = 10, w_img: float = 0.6, w_text: float = 0.4
+    ) -> list[SearchResult]:
+        """Ranks by an already-prepared piece of Japanese text rather than
+        translating `query` first -- used for HyDE, where the text to embed
+        is an LLM-generated hypothetical passage, not the user's query
+        itself (see scripts/eval.py)."""
+        query_emb = self.embedder.embed_texts([japanese_text])[0]
+        results = self._rank(query_emb, top_k, w_img, w_text)
+        for r in results:
+            r.query_ja = japanese_text
+        return results
+
     def translate_result_texts(self, results: list[SearchResult]) -> list[str | None]:
         """English translations of each result's Japanese dialogue, aligned
         with `results` (None where a result has no dialogue text)."""

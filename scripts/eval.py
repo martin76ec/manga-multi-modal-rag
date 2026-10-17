@@ -15,9 +15,18 @@ Faithfulness/relevancy are judged two ways:
 
 Nothing here touches data/index/ -- hyperparameters are all applied at
 query time (w_img/w_text in search.py, max_steps/top_k in agent.py), so
-this never re-embeds or re-indexes anything. Requires AisazuNihaIrarenai,
-DollGun, and HanzaiKousyouninMinegishiEitarou specifically indexed (the
-books the eval cases below reference), not just any subset.
+this never re-embeds or re-indexes anything. Requires the full 87-book
+index (the eval cases below are mined across many different books, not
+just a couple), not a small subset.
+
+Also sweeps two retrieval/reasoning techniques, not just numeric
+hyperparameters:
+- HyDE (sweep_hyde): embed an LLM-generated hypothetical passage instead
+  of the translated query itself.
+- IRCoT ablation (inside sweep_agent): compare the agent's default
+  behavior (each round's search query is its own latest reasoning step)
+  against a version that always re-searches the literal original question,
+  isolating whether that reformulation is actually what helps.
 """
 
 from __future__ import annotations
@@ -93,6 +102,102 @@ RETRIEVAL_CASES = [
         verified_by="Jev: asked independently if panel+dialogue depicts a detective/investigation scene, noul=0.97",
         difficulty="moderate",
     ),
+    # Added in a later pass: mined by running real searches for distinctive
+    # low-frequency character names/terms across the full 87-book index and
+    # keeping only the ones whose actual top-1 result's own dialogue
+    # literally contains the query string (confirmed by running the real
+    # search, not assumed from the metadata character field -- that field
+    # alone was NOT reliable: several candidates whose character field
+    # matched didn't come back top-1 for the matching CLIP query at all).
+    EvalCase(
+        query="オートマトン",
+        expected_ids=["ARMS_004_00000027"],
+        verified_by='text-verified: dialogue literally "ここならオートマトンに見つからないわね" (score 0.491)',
+        difficulty="very_simple",
+    ),
+    EvalCase(
+        query="宇宙人",
+        expected_ids=["LancelotFullThrottle_007_000349e8"],
+        verified_by='text-verified: dialogue literally "くっまさか別の宇宙人まで現れるとは！" (score 0.529)',
+        difficulty="very_simple",
+    ),
+    EvalCase(
+        query="ペリー提督",
+        expected_ids=["RinToSiteSippuNoNaka_036_0005a7b9"],
+        verified_by="text-verified: dialogue names Commodore Perry directly, also in the character field (score 0.481)",
+        difficulty="very_simple",
+    ),
+    EvalCase(
+        query="メカ",
+        expected_ids=["ParaisoRoad_051_000521f1"],
+        verified_by='text-verified: dialogue literally "白君今度のメカはやたら大きいわね" (score 0.536)',
+        difficulty="simple",
+    ),
+    EvalCase(
+        query="山岡",
+        expected_ids=["RinToSiteSippuNoNaka_094_0005afd6"],
+        verified_by='text-verified: dialogue literally "山岡が･･･" (score 0.505)',
+        difficulty="simple",
+    ),
+    EvalCase(
+        query="お玉",
+        expected_ids=["JijiBabaFight_036_0002baa2"],
+        verified_by='text-verified: dialogue literally "お玉や～" (score 0.494)',
+        difficulty="simple",
+    ),
+    # Semantic queries worded differently from the matching dialogue --
+    # real top-1 still verified by what the dialogue actually says, not a
+    # literal keyword match.
+    EvalCase(
+        query="a person crying",
+        expected_ids=["Arisa_055_00006ce5"],
+        verified_by='text-verified: dialogue "泣くな！" ("don\'t cry!")',
+        difficulty="moderate",
+    ),
+    EvalCase(
+        query="two characters fighting",
+        expected_ids=["Joouari_091_0002d607"],
+        verified_by='text-verified: dialogue "武器を持つ者は戦え！" ("those with weapons, fight!")',
+        difficulty="moderate",
+    ),
+    EvalCase(
+        query="two people hugging",
+        expected_ids=["ToutaMairimasu_043_00070b37"],
+        verified_by='text-verified: dialogue "ハグッ。" ("hug.")',
+        difficulty="moderate",
+    ),
+    EvalCase(
+        query="someone riding a bicycle",
+        expected_ids=["HarukaRefrain_083_00021a19"],
+        verified_by='text-verified: dialogue mentions "自転車" (bicycle) directly',
+        difficulty="moderate",
+    ),
+    EvalCase(
+        query="a classroom full of students",
+        expected_ids=["TensiNoHaneToAkumaNoShippo_087_0006cc77"],
+        verified_by='text-verified: dialogue "授業中" ("during class")',
+        difficulty="moderate",
+    ),
+    EvalCase(
+        query="a person swimming in the ocean",
+        expected_ids=["HeiseiJimen_041_00022fa4"],
+        verified_by='text-verified: dialogue "子供が泳いでるのに危いじゃな〜〜いっ" ("the child is swimming, that\'s dangerous!")',
+        difficulty="moderate",
+    ),
+    # Genuinely visual: confirmed by actually viewing the crop image, since
+    # the dialogue alone doesn't give the answer away.
+    EvalCase(
+        query="a dog barking outdoors",
+        expected_ids=["TsubasaNoKioku_022_00073509"],
+        verified_by='visual: a collared dog barking ("ワンワン!") amid outdoor foliage, two people nearby -- dialogue is just the bark sound effect, not a description',
+        difficulty="hard",
+    ),
+    EvalCase(
+        query="a car driving on a mountain road",
+        expected_ids=["AppareKappore_071_00005bd1"],
+        verified_by='visual: an open-top car speeding down a road with motion lines, mountainside, street lamps, a second car visible -- dialogue only reads "that car has no tire!?", doesn\'t mention driving or a mountain road',
+        difficulty="hard",
+    ),
 ]
 
 # Complex/very-complex cases are agent-only (single retrieval can't answer
@@ -107,6 +212,12 @@ class AgentEvalCase:
 
 
 AGENT_CASES = [
+    AgentEvalCase(
+        question="Is there a dog barking outdoors in this story, and what does the scene look like?",
+        expected_ids=["TsubasaNoKioku_022_00073509"],
+        difficulty="simple",
+        note="single-hop sanity check over a visually-verified retrieval case; expected to succeed in round 1",
+    ),
     AgentEvalCase(
         question="What happens when a police officer shows up at someone's house?",
         expected_ids=[
@@ -168,6 +279,64 @@ def sweep_retrieval(searcher: Searcher) -> None:
         w_text = round(1 - w_img, 1)
         hit_rate, mrr = hit_rate_and_mrr(searcher, RETRIEVAL_CASES, top_k=5, w_img=w_img, w_text=w_text)
         print(f"{w_img:>6.1f} {w_text:>7.1f} {hit_rate:>9.2f} {mrr:>6.2f}")
+
+
+HYDE_PROMPT = """You generate hypothetical manga dialogue for a retrieval experiment (HyDE).
+
+Given a short English description of a scene, write ONE short line of
+Japanese dialogue that a character might plausibly say in that exact scene,
+in the typical terse/exclamatory style of manga speech bubbles. Do not
+explain, do not add quotes or a translation, output only the Japanese line
+itself, nothing else."""
+
+
+def generate_hyde_passage(llm: ChatLLM, query_en: str) -> str:
+    """HyDE (Gao et al. 2022): instead of embedding the query itself,
+    generate a hypothetical passage that would answer/match it and embed
+    that instead -- the idea being a plausible *answer* sits closer in
+    embedding space to real matching documents than a short query does.
+    Here the "documents" are manga dialogue lines, so the hypothetical
+    passage is a hypothetical line of dialogue, generated directly in
+    Japanese (the embedding space is Japanese-native) rather than round-
+    tripping through English + translation."""
+    messages = [
+        {"role": "system", "content": HYDE_PROMPT},
+        {"role": "user", "content": f"Scene: {query_en}"},
+    ]
+    reply = llm.chat(messages, max_tokens=40)
+    return reply.strip().strip('"').splitlines()[0]
+
+
+def hyde_hit_rate_and_mrr(
+    searcher: Searcher, llm: ChatLLM, cases: list[EvalCase], top_k: int, w_img: float, w_text: float
+) -> tuple[float, float, list[tuple[str, str]]]:
+    hits = 0
+    reciprocal_ranks = []
+    passages = []
+    for case in cases:
+        hyde_ja = generate_hyde_passage(llm, case.query)
+        passages.append((case.query, hyde_ja))
+        results = searcher.search_by_text_embedding(hyde_ja, top_k=top_k, w_img=w_img, w_text=w_text)
+        ids = [r.meta["id"] for r in results]
+        rank = next((i + 1 for i, id_ in enumerate(ids) if id_ in case.expected_ids), None)
+        reciprocal_ranks.append(1 / rank if rank else 0.0)
+        hits += 1 if rank else 0
+    n = len(cases)
+    return hits / n, sum(reciprocal_ranks) / n, passages
+
+
+def sweep_hyde(searcher: Searcher) -> None:
+    """HyDE vs the project's default (translate query -> embed directly),
+    at the same w_img/w_text the retrieval sweep found best for hit-rate."""
+    llm = ChatLLM()
+    direct_hit, direct_mrr = hit_rate_and_mrr(searcher, RETRIEVAL_CASES, top_k=5, w_img=0.6, w_text=0.4)
+    hyde_hit, hyde_mrr, passages = hyde_hit_rate_and_mrr(searcher, llm, RETRIEVAL_CASES, top_k=5, w_img=0.6, w_text=0.4)
+    print(f"\nHyDE vs direct query embedding (top_k=5, w_img=0.6, w_text=0.4, {len(RETRIEVAL_CASES)} cases):")
+    print(f"  direct: hit-rate={direct_hit:.2f} MRR={direct_mrr:.2f}")
+    print(f"  hyde:   hit-rate={hyde_hit:.2f} MRR={hyde_mrr:.2f}")
+    print("  generated passages:")
+    for query, passage in passages:
+        print(f"    {query!r} -> {passage!r}")
 
 
 def judge_answer(llm: ChatLLM, question: str, evidence: str, answer: str) -> tuple[str | None, str | None]:
@@ -247,30 +416,37 @@ def judge_answer_jev(question: str, evidence: str, panel_image_paths: list[Path]
 
     from typesafe_sdk import Image, Noul, Score, TypeSafeClient
 
-    with TypeSafeClient() as client:
-        response = client.system_one(
-            state={
-                "question": question,
-                "cited_text_evidence": evidence,
-                "cited_panel_images": [Image(_jev_image_bytes(p)) for p in panel_image_paths],
-                "answer": answer,
-            },
-            questions={
-                "faithfulness": Noul(
-                    instructions=(
-                        "Is every claim in `answer` actually supported by `cited_text_evidence` and "
-                        "what is visible in `cited_panel_images`? Answer no if anything is invented, "
-                        "contradicted, or not actually shown in the images."
-                    )
-                ),
-                "relevancy": Score(
-                    instructions="Does `answer` address `question`?",
-                    criteria=["does not address the question", "partially addresses it", "fully addresses it"],
-                ),
-            },
-            # images are an experimental Jev feature and require this opt-in header
-            extra_headers={"TypeSafe-Danger-Zone-Images": "true"},
-        )
+    try:
+        with TypeSafeClient() as client:
+            response = client.system_one(
+                state={
+                    "question": question,
+                    "cited_text_evidence": evidence,
+                    "cited_panel_images": [Image(_jev_image_bytes(p)) for p in panel_image_paths],
+                    "answer": answer,
+                },
+                questions={
+                    "faithfulness": Noul(
+                        instructions=(
+                            "Is every claim in `answer` actually supported by `cited_text_evidence` and "
+                            "what is visible in `cited_panel_images`? Answer no if anything is invented, "
+                            "contradicted, or not actually shown in the images."
+                        )
+                    ),
+                    "relevancy": Score(
+                        instructions="Does `answer` address `question`?",
+                        criteria=["does not address the question", "partially addresses it", "fully addresses it"],
+                    ),
+                },
+                # images are an experimental Jev feature and require this opt-in header
+                extra_headers={"TypeSafe-Danger-Zone-Images": "true"},
+            )
+    except Exception as e:
+        # e.g. billing/credits exhausted (402), transient network/API errors --
+        # real but operational, not a reason to crash the rest of the sweep,
+        # which still has hit-rate and the text-only judge without Jev.
+        print(f"  (jev: call failed, skipping -- {e})")
+        return None
     return response.answers["faithfulness"].noul, response.answers["relevancy"].score
 
 
@@ -293,9 +469,11 @@ DECLINE_MARKERS = (
 )
 
 
-def _run_one_agent_case(searcher: Searcher, question: str, expected_ids: list[str] | None, top_k: int, max_steps: int) -> None:
+def _run_one_agent_case(
+    searcher: Searcher, question: str, expected_ids: list[str] | None, top_k: int, max_steps: int, ircot: bool = True
+) -> None:
     judge_llm = ChatLLM()
-    agent = MrklIrcotAgent(searcher, ChatLLM(), max_steps=max_steps, top_k=top_k)
+    agent = MrklIrcotAgent(searcher, ChatLLM(), max_steps=max_steps, top_k=top_k, ircot=ircot)
     result = agent.answer(question)
     cited_ids = {r.meta["id"] for r, _ in result.seen_panels}
     evidence = "\n".join(
@@ -321,16 +499,30 @@ def _run_one_agent_case(searcher: Searcher, question: str, expected_ids: list[st
         print(f"  Jev judge (sees actual images): faithfulness={jev_faith:.2f} relevancy={jev_rel:.2f}/2")
 
 
+MULTI_HOP_CASE = AGENT_CASES[1]  # "police officer shows up at someone's house" -- the one case that actually
+# needs more than one retrieval round, so it's the only one worth sweeping top_k/max_steps/ircot over.
+
+
 def sweep_agent(searcher: Searcher) -> None:
     for case in AGENT_CASES:
         print(f"\n[{case.difficulty}] {case.question!r}")
         print(f"  note: {case.note}")
-        if case is AGENT_CASES[0]:
+        if case is MULTI_HOP_CASE:
             for top_k, max_steps in [(1, 1), (3, 4)]:
                 print(f" top_k={top_k} max_steps={max_steps}:")
                 _run_one_agent_case(searcher, case.question, case.expected_ids, top_k=top_k, max_steps=max_steps)
         else:
             _run_one_agent_case(searcher, case.question, case.expected_ids, top_k=3, max_steps=4)
+
+    print(f"\n[ircot ablation] {MULTI_HOP_CASE.question!r} (top_k=3, max_steps=4)")
+    print("  note: ircot=True lets each round's search query be the agent's own latest reasoning step "
+          "(the project's default); ircot=False forces every round to re-search the literal original "
+          "question instead, isolating whether that reformulation is actually what helps.")
+    for ircot in (True, False):
+        print(f" ircot={ircot}:")
+        _run_one_agent_case(
+            searcher, MULTI_HOP_CASE.question, MULTI_HOP_CASE.expected_ids, top_k=3, max_steps=4, ircot=ircot
+        )
 
 
 def main() -> None:
@@ -343,6 +535,7 @@ def main() -> None:
     searcher = Searcher(index, embedder)
 
     sweep_retrieval(searcher)
+    sweep_hyde(searcher)
     sweep_agent(searcher)
 
 
