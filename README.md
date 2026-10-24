@@ -2,7 +2,7 @@
 
 # 漫画 · manga-multi-modal-rag
 
-**Ask manga questions in English. Get answers grounded in real panels.**
+**Find manga panels from a lazy hint or a detailed description.**
 
 Multimodal agentic RAG over 82,124 panels from [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s).
 
@@ -34,7 +34,7 @@ flowchart LR
 ### 2 · How does it work?
 
 ```
-prompt: "someone holding a gun" --> translate into --> "銃を握っている人"  --> generate image+dialog embeddings -->  score = 0.6·image + 0.4·text
+prompt: "someone holding a gun" --> translate into --> "銃を握っている人"  --> generate text embedding --> compare against panel image+dialog embeddings -->  score = 0.6·image + 0.4·text
 ```
 
 - **Translation** CLIP and the corpus are both Japanese, so English queries are translated before embedding.
